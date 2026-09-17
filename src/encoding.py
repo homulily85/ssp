@@ -3,7 +3,7 @@ from __future__ import annotations
 from pysat.card import CardEnc, EncType, ITotalizer
 from pysat.formula import CNF, IDPool
 
-from .model import CNFBuildResult, ReducedInstance
+from .model import AdditionalConstraints, CNFBuildResult, ReducedInstance
 
 
 def build_cnf(
@@ -11,7 +11,8 @@ def build_cnf(
     k: int,
     d_matrix: tuple[tuple[int, ...], ...],
     *,
-    include_adjacency: bool = True,
+    additional_constraints: AdditionalConstraints | None = None,
+    defer_adjacency: bool = False,
     include_global_cardinality: bool = True,
 ) -> CNFBuildResult:
     cnf = CNF()
@@ -22,6 +23,11 @@ def build_cnf(
     vars_t: dict[tuple[int, int], int] = {}
     vars_s: dict[tuple[int, int, int], int] = {}
     n, m, c = instance.n, instance.m, instance.c
+    additions = (
+        additional_constraints
+        if additional_constraints is not None
+        else AdditionalConstraints.all()
+    )
 
     if k < c:
         return CNFBuildResult(
@@ -114,31 +120,20 @@ def build_cnf(
             t, z, previous = vars_t[u, j], vars_z[u, j], vars_z[u, j - 1]
             cnf.extend([[-t, z], [-t, -previous], [-z, previous, t]])
 
-    # 9. Required tool was present or is inserted now.
-    for i, required in enumerate(instance.requirements):
-        for j in range(1, n + 1):
-            for u in sorted(required):
-                cnf.append([-vars_x[i, j], vars_z[u, j - 1], vars_t[u, j]])
+    append_additional_constraints(
+        cnf=cnf,
+        instance=instance,
+        d_matrix=d_matrix,
+        k=k,
+        vars_x=vars_x,
+        vars_y=vars_y,
+        vars_z=vars_z,
+        vars_t=vars_t,
+        enabled=additions,
+        include_adjacency=not defer_adjacency,
+    )
 
-    # 10. From the second position onward, every inserted tool must be
-    # required by the job scheduled at that position. Position 1 is excluded
-    # because its C initial insertions may include filler tools.
-    jobs_requiring_tool = [
-        [i for i, required in enumerate(instance.requirements) if u in required]
-        for u in range(m)
-    ]
-    for j in range(2, n + 1):
-        for u in range(m):
-            cnf.append(
-                [-vars_t[u, j]]
-                + [vars_x[i, j] for i in jobs_requiring_tool[u]]
-            )
-
-    # 11. Bound-dependent adjacency pruning.
-    if include_adjacency:
-        cnf.extend(adjacency_clauses(instance, d_matrix, k, vars_x))
-
-    # 12. Global sequential counter over insertion literals.
+    # 9. Global sequential counter over insertion literals.
     t_literals = [vars_t[u, j] for j in range(1, n + 1) for u in range(m)]
     before_cardinality = vpool.top
     if include_global_cardinality and k < len(t_literals):
@@ -188,17 +183,71 @@ def adjacency_clauses(
     return clauses
 
 
+def append_additional_constraints(
+    *,
+    cnf: CNF,
+    instance: ReducedInstance,
+    d_matrix: tuple[tuple[int, ...], ...],
+    k: int,
+    vars_x: dict[tuple[int, int], int],
+    vars_y: dict[tuple[int, int], int],
+    vars_z: dict[tuple[int, int], int],
+    vars_t: dict[tuple[int, int], int],
+    enabled: AdditionalConstraints,
+    include_adjacency: bool,
+) -> None:
+    """Append the optional strengthening and symmetry constraints."""
+    n, m = instance.n, instance.m
+
+    if enabled.symmetry:
+        pivot = min(
+            range(n),
+            key=lambda i: (
+                -len(instance.requirements[i]),
+                instance.local_to_original[i],
+            ),
+        )
+        midpoint = (n + 1) // 2
+        cnf.append([-vars_y[pivot, midpoint + 1]])
+
+    if enabled.required_transition:
+        for i, required in enumerate(instance.requirements):
+            for j in range(1, n + 1):
+                for u in sorted(required):
+                    cnf.append(
+                        [-vars_x[i, j], vars_z[u, j - 1], vars_t[u, j]]
+                    )
+
+    if enabled.insertion_requirement:
+        jobs_requiring_tool = [
+            [i for i, required in enumerate(instance.requirements) if u in required]
+            for u in range(m)
+        ]
+        for j in range(2, n + 1):
+            for u in range(m):
+                cnf.append(
+                    [-vars_t[u, j]]
+                    + [vars_x[i, j] for i in jobs_requiring_tool[u]]
+                )
+
+    if enabled.adjacency and include_adjacency:
+        cnf.extend(adjacency_clauses(instance, d_matrix, k, vars_x))
+
+
 def build_incremental_cnf(
     instance: ReducedInstance,
     max_k: int,
     d_matrix: tuple[tuple[int, ...], ...],
+    *,
+    additional_constraints: AdditionalConstraints | None = None,
 ) -> CNFBuildResult:
     """Build bound-independent CNF plus one reusable iterative totalizer."""
     build = build_cnf(
         instance,
         max_k,
         d_matrix,
-        include_adjacency=False,
+        additional_constraints=additional_constraints,
+        defer_adjacency=True,
         include_global_cardinality=False,
     )
     if build.immediate_unsat:

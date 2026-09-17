@@ -5,6 +5,55 @@ from pathlib import Path
 from typing import Any
 
 
+ADDITIONAL_CONSTRAINT_NAMES = (
+    "symmetry",
+    "insertion-requirement",
+    "adjacency",
+    "required-transition",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AdditionalConstraints:
+    symmetry: bool = True
+    insertion_requirement: bool = True
+    adjacency: bool = True
+    required_transition: bool = True
+
+    @classmethod
+    def all(cls) -> "AdditionalConstraints":
+        return cls()
+
+    @classmethod
+    def none(cls) -> "AdditionalConstraints":
+        return cls(False, False, False, False)
+
+    @classmethod
+    def from_names(cls, names: list[str] | tuple[str, ...]) -> "AdditionalConstraints":
+        selected = set(names)
+        unknown = selected.difference(ADDITIONAL_CONSTRAINT_NAMES)
+        if unknown:
+            raise ValueError(f"unknown additional constraints: {sorted(unknown)}")
+        return cls(
+            symmetry="symmetry" in selected,
+            insertion_requirement="insertion-requirement" in selected,
+            adjacency="adjacency" in selected,
+            required_transition="required-transition" in selected,
+        )
+
+    def enabled_names(self) -> tuple[str, ...]:
+        return tuple(
+            name
+            for name, enabled in (
+                ("symmetry", self.symmetry),
+                ("insertion-requirement", self.insertion_requirement),
+                ("adjacency", self.adjacency),
+                ("required-transition", self.required_transition),
+            )
+            if enabled
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class SSPInstance:
     name: str
@@ -60,7 +109,7 @@ class SolverResult:
     status: str
     solve_time: float
     model: tuple[int, ...] | None
-    stats: dict[str, int | float]
+    stats: dict[str, int | float | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +130,7 @@ class IterationResult:
     variables: int
     clauses: int
     solve_time: float
-    stats: dict[str, int | float] = field(default_factory=dict)
+    stats: dict[str, int | float | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +138,7 @@ class OptimizationResult:
     instance: SSPInstance
     dominance: DominanceResult
     mode: str
+    additional_constraints: tuple[str, ...]
     status: str
     lower_bound: int
     initial_upper_bound: int

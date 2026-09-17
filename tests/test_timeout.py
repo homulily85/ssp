@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import multiprocessing
+import csv
+import io
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from src.distances import pairwise_distances
@@ -10,6 +14,7 @@ from src.dominance import preprocess_dominance
 from src.encoding import build_cnf
 from src.model import SolverResult
 from src.optimize import optimize_instance
+from src.report import print_result, write_csv
 from src.solver import IncrementalSolverSession, solve_cnf
 
 from tests.helpers import make_instance
@@ -33,6 +38,7 @@ class TimeoutTests(unittest.TestCase):
             result = solve_cnf(build, time_limit=0.02)
         self.assertEqual(result.status, "TIMEOUT")
         self.assertLess(time.perf_counter() - started, 2.0)
+        self.assertTrue(all(value is None for value in result.stats.values()))
 
     def test_optimizer_does_not_claim_optimum_after_timeout(self):
         instance = make_instance(
@@ -45,6 +51,17 @@ class TimeoutTests(unittest.TestCase):
         self.assertIsNone(result.optimum)
         self.assertEqual(result.best_cost, result.initial_upper_bound)
         self.assertEqual(result.iterations[-1].status, "TIMEOUT")
+
+        console = io.StringIO()
+        print_result(result, console)
+        self.assertIn("restarts=N/A", console.getvalue())
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "timeout.csv"
+            write_csv([result], output)
+            with output.open(encoding="utf-8", newline="") as handle:
+                row = next(csv.DictReader(handle))
+            for key in ("restarts", "conflicts", "decisions", "propagations"):
+                self.assertEqual(row[key], "N/A")
 
     def test_keyboard_interrupt_terminates_solver_worker(self):
         dominance = preprocess_dominance(make_instance([{0}, {1}], 2, 1))
@@ -72,6 +89,7 @@ class TimeoutTests(unittest.TestCase):
                 new_clauses=[], assumptions=[], time_limit=0.02
             )
         self.assertEqual(result.status, "TIMEOUT")
+        self.assertTrue(all(value is None for value in result.stats.values()))
         self.assertFalse(
             any(
                 child.name == "ssp-cadical300-incremental"

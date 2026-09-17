@@ -54,6 +54,7 @@ Cú pháp CLI:
 
 ```text
 ssp-sat [-h] [--limit SECONDS] [--incremental]
+        [--enable-constraint NAME | --core-only]
         [--csv CSV | --no-csv] input
 ```
 
@@ -64,6 +65,11 @@ Các tham số:
 - `--limit SECONDS`: tổng time limit cho mỗi problem, mặc định `600` giây;
 - `--incremental`: bật chế độ Incremental SAT; nếu không có cờ này thì dùng
   standard mode;
+- không truyền cờ chọn constraint: bật mặc định cả bốn additional constraints;
+- `--core-only`: chỉ dùng core encoding, tắt toàn bộ additional constraints;
+- `--enable-constraint NAME`: chỉ bật constraint có tên được chọn; có thể lặp
+  cờ để chọn nhiều tên. Các tên hợp lệ là `symmetry`,
+  `insertion-requirement`, `adjacency`, `required-transition`;
 - `--csv PATH`: chỉ định đường dẫn CSV;
 - `--no-csv`: không tạo CSV.
 
@@ -73,6 +79,9 @@ Ví dụ:
 uv run ssp-sat data/Catanzaro/datA1 --limit 120
 uv run ssp-sat data/Catanzaro/datA1 --incremental
 uv run ssp-sat data --incremental --csv benchmark.csv
+uv run ssp-sat data/dummy.txt --core-only
+uv run ssp-sat data/dummy.txt --enable-constraint symmetry \
+  --enable-constraint adjacency
 ```
 
 Project được khai báo trong `pyproject.toml` với distribution name `ssp-sat`,
@@ -132,6 +141,7 @@ Các record chính nằm trong `src/model.py`:
   các job bị loại;
 - `CNFBuildResult`: CNF, `IDPool`, toàn bộ variable maps, thống kê và output
   của `ITotalizer` khi có;
+- `AdditionalConstraints`: cấu hình bốn nhóm mệnh đề tùy chọn;
 - `SolverResult`: `SAT`, `UNSAT` hoặc `TIMEOUT`, model, solve time và stats;
 - `IterationResult`: kết quả của một bound;
 - `OptimizationResult`: mode, bounds, status, sequences, optimum/best cost và
@@ -206,6 +216,14 @@ KTNS trả cả cost và magazine configuration tại từng position.
 
 SAT chỉ encode reduced instance và sử dụng một `IDPool` chung.
 
+Encoding được chia rõ thành:
+
+- **core encoding**: luôn được tạo, bảo đảm permutation, job requirements,
+  exact magazine capacity, định nghĩa insertion và global insertion bound;
+- **additional constraints**: không bắt buộc đối với tính đúng của mô hình.
+  Có thể bật/tắt qua CLI. Nếu người dùng không chỉ định lựa chọn thì cả bốn
+  nhóm được bật để giữ cấu hình mạnh nhất làm mặc định.
+
 ### 7.1 Variables
 
 - `x[i,j]`: job local `i` nằm chính xác tại position `j`;
@@ -264,7 +282,7 @@ Magazine ban đầu trước position 1 rỗng:
 z_{u,0}=0.
 ```
 
-### 7.4 Tool insertions và strengthening
+### 7.4 Tool insertions trong core
 
 Insertion variables thỏa equivalence:
 
@@ -272,11 +290,39 @@ Insertion variables thỏa equivalence:
 t_{u,j}\leftrightarrow(z_{u,j}\land\neg z_{u,j-1}).
 ```
 
-Required tool strengthening:
+Đây là phần core. Hai strengthening liên quan đến insertion được xếp vào
+additional constraints ở mục tiếp theo.
+
+### 7.5 Additional constraints
+
+Bốn nhóm sau chỉ được thêm bởi `append_additional_constraints(...)` khi cờ
+tương ứng được bật.
+
+#### Symmetry breaking
+
+Chọn pivot:
+
+```math
+p=\arg\max_i |R_i|.
+```
+
+Nếu nhiều job cùng lớn nhất, chọn job có original ID nhỏ nhất. Pivot bị ép vào
+nửa đầu sequence bằng unit clause:
+
+```math
+\neg y_{p,\lceil N'/2\rceil+1}.
+```
+
+Vì `y[p,j]` còn true khi pivot nằm tại hoặc sau position `j`, clause này tương
+đương position của pivot không vượt `ceil(N'/2)`.
+
+#### Required transition
 
 ```math
 x_{i,j}\rightarrow(z_{u,j-1}\lor t_{u,j}),\qquad u\in R_i.
 ```
+
+#### Insertion requirement từ position 2
 
 Từ position 2, mỗi inserted tool phải được job tại position đó yêu cầu:
 
@@ -289,7 +335,7 @@ Nếu không active job nào yêu cầu tool `u`, disjunction rỗng tạo unit 
 `not t[u,j]`. Position 1 được loại khỏi strengthening này vì exact magazine
 capacity bắt buộc `c` initial insertions, trong đó có thể có filler tools.
 
-### 7.5 Adjacency pruning
+#### Adjacency pruning
 
 Tại bound `k`, nếu:
 
@@ -304,9 +350,10 @@ thì cấm `i` đứng ngay trước `h` bằng:
 ```
 
 Trong standard mode, clauses được tạo lại theo từng bound. Trong incremental
-mode, chỉ delta clauses mới được thêm; tập clauses tăng đơn điệu khi `k` giảm.
+mode, chỉ delta clauses mới được thêm nếu cờ `adjacency` đang bật; tập clauses
+tăng đơn điệu khi `k` giảm.
 
-### 7.6 Global insertion cardinality
+### 7.6 Global insertion cardinality trong core
 
 Standard mode dùng một sequential counter mới cho từng bound:
 
@@ -382,6 +429,9 @@ Khi timeout:
 - status là `TIMEOUT`;
 - `best_cost` vẫn là một upper bound khả thi;
 - `optimum` để trống vì chưa có chứng nhận tối ưu.
+- process bị kill không còn cơ hội trả `accum_stats()`, do đó bốn solver stats
+  của iteration đó là `N/A`; không ghi `0` vì `0` là một giá trị hợp lệ nhưng
+  sai nghĩa trong trường hợp chưa quan sát được thống kê.
 
 Khi người dùng nhấn `Ctrl+C`:
 
@@ -412,11 +462,13 @@ cost `b` và bound `b-1` là UNSAT thì `b` là optimum. Nếu đạt `LB` với
 
 Console in cho từng problem:
 
-- mode và problem ID;
+- mode, problem ID và danh sách additional constraints đang bật;
 - số original/reduced/dominated jobs;
 - dominance mapping;
 - LB, initial UB và greedy sequence;
 - từng SAT iteration: `k`, status, số variables/clauses và solve time;
+- solver statistics của từng iteration: `restarts`, `conflicts`, `decisions`,
+  `propagations`;
 - optimum hoặc best feasible cost;
 - reduced/full sequence;
 - KTNS verification cost và total runtime.
@@ -440,15 +492,27 @@ CSV được ghi qua temporary file rồi `os.replace`, tránh để lại file 
 giả nếu việc ghi thất bại. Các cột hiện tại:
 
 ```text
-problem, mode, status, n, n_reduced, dominated, lb, initial_ub,
-best_cost, optimum, sat_calls, total_vars_last, total_clauses_last,
-sat_time, total_time
+problem, mode, constraint_symmetry, constraint_insertion_requirement,
+constraint_adjacency, constraint_required_transition, status, n, n_reduced,
+dominated, lb, initial_ub, best_cost, optimum, sat_calls,
+total_vars_last, total_clauses_last, sat_time, restarts, conflicts, decisions,
+propagations, total_time
 ```
+
+Bốn cột `constraint_*` chứa `true`/`false` và phản ánh đúng cấu hình của từng
+problem. Nếu bất kỳ SAT call nào bị kill trước khi trả stats, tổng tương ứng
+trong CSV là `N/A` thay vì một tổng không đầy đủ.
+
+Trong standard mode, mỗi worker chỉ solve một lần nên stats vốn là per-call.
+Trong incremental mode, PySAT trả accumulated stats; worker chuyển chúng thành
+delta theo iteration trước khi gửi về parent. CSV cộng các delta, vì vậy bốn
+trường thống kê biểu diễn tổng của problem mà không bị double-count.
 
 ## 12. API chính
 
 ```python
 from src.parser import parse_file
+from src.model import AdditionalConstraints
 from src.optimize import optimize_instance
 
 instances = parse_file("data/Catanzaro/datA1")
@@ -459,6 +523,16 @@ incremental = optimize_instance(
     time_limit=600,
     incremental=True,
 )
+core_only = optimize_instance(
+    instances[0],
+    additional_constraints=AdditionalConstraints.none(),
+)
+selected = optimize_instance(
+    instances[0],
+    additional_constraints=AdditionalConstraints.from_names(
+        ["symmetry", "adjacency"]
+    ),
+)
 ```
 
 Các API thấp hơn:
@@ -466,8 +540,8 @@ Các API thấp hơn:
 - `preprocess_dominance(instance)`;
 - `pairwise_distances(reduced_instance)`;
 - `ktns(sequence, requirements, m, c)`;
-- `build_cnf(reduced_instance, k, distances)`;
-- `build_incremental_cnf(reduced_instance, max_k, distances)`;
+- `build_cnf(..., additional_constraints=...)`;
+- `build_incremental_cnf(..., additional_constraints=...)`;
 - `solve_cnf(build, time_limit)`;
 - `IncrementalSolverSession`;
 - `validate_sat_solution(...)`.
@@ -508,19 +582,22 @@ Test suite bao phủ:
 - dominance chains, duplicates và reconstruction;
 - KTNS so với exhaustive magazine configurations;
 - structural order encoding và sequential-counter position AMO;
+- symmetry-breaking pivot theo largest requirement set;
+- tách core/additional encoding và mọi tổ hợp cờ CLI;
 - exact magazine counter và truth table của `t`;
 - strengthening insert-tool từ position 2 và initial filler exception;
 - adjacency pruning và tính đơn điệu của adjacency delta;
 - `ITotalizer` so với standard cardinality trên nhiều bound;
 - standard/incremental optimum so với exhaustive job permutations;
 - timeout, worker reuse, process cleanup và `KeyboardInterrupt`;
+- `restarts`, `conflicts`, `decisions`, `propagations` cho cả hai solver mode;
 - CLI, mode trong CSV, timestamped filenames và partial CSV.
 
 Trạng thái xác minh tại thời điểm viết tài liệu:
 
-- 33 unit/integration tests thành công;
+- 39 unit/integration tests thành công;
 - parser đọc 168 file / 1.671 instances;
-- 80 random small instances bổ sung cho kết quả
+- 60 random small instances sau khi thêm symmetry-breaking cho kết quả
   `standard == incremental == exhaustive`;
 - `dummy.txt` trả optimum `11` ở incremental mode;
 - `datA1/problem-2` dùng cùng một incremental worker cho các bound `12`, `11`,

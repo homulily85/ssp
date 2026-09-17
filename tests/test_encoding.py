@@ -7,7 +7,7 @@ from pysat.solvers import Solver
 from src.distances import pairwise_distances
 from src.dominance import preprocess_dominance
 from src.encoding import adjacency_clauses, build_cnf, build_incremental_cnf
-from src.model import ReducedInstance
+from src.model import AdditionalConstraints, ReducedInstance
 from src.solver import solve_cnf
 
 from tests.helpers import make_instance
@@ -23,6 +23,47 @@ class EncodingTests(unittest.TestCase):
         _, build = self._build([{0}], 2, 1, 0)
         self.assertTrue(build.immediate_unsat)
         self.assertEqual(solve_cnf(build).status, "UNSAT")
+
+    def test_optional_constraints_are_separate_from_core_encoding(self):
+        reduced = ReducedInstance(
+            "optional-constraints",
+            4,
+            2,
+            (frozenset({0, 1}), frozenset({2, 3})),
+            (0, 1),
+        )
+        distances = pairwise_distances(reduced)
+        core = build_cnf(
+            reduced,
+            3,
+            distances,
+            additional_constraints=AdditionalConstraints.none(),
+        )
+        representatives = {
+            "symmetry": [-core.vars_y[0, 2]],
+            "required-transition": [
+                -core.vars_x[0, 1],
+                core.vars_z[0, 0],
+                core.vars_t[0, 1],
+            ],
+            "insertion-requirement": [
+                -core.vars_t[0, 2],
+                core.vars_x[0, 2],
+            ],
+            "adjacency": [-core.vars_x[0, 1], -core.vars_x[1, 2]],
+        }
+        for clause in representatives.values():
+            self.assertNotIn(clause, core.cnf.clauses)
+
+        for name, clause in representatives.items():
+            with self.subTest(constraint=name):
+                selected = build_cnf(
+                    reduced,
+                    3,
+                    distances,
+                    additional_constraints=AdditionalConstraints.from_names([name]),
+                )
+                self.assertIn(clause, selected.cnf.clauses)
 
     def test_decoded_x_is_always_a_permutation(self):
         reduced, build = self._build([{0}, {1}, {2}], 3, 2, 6)
@@ -43,7 +84,41 @@ class EncodingTests(unittest.TestCase):
                 self.assertEqual({jobs[0] for jobs in selected}, set(range(reduced.n)))
                 solver.add_clause([-build.vars_x[selected[j - 1][0], j] for j in range(1, reduced.n + 1)])
                 seen += 1
-            self.assertEqual(seen, 6)
+            # The structural encoding has six permutations; reversal symmetry
+            # breaking keeps the four with pivot job 0 in the first half.
+            self.assertEqual(seen, 4)
+
+    def test_largest_requirement_job_is_in_first_half(self):
+        reduced = ReducedInstance(
+            "symmetry",
+            5,
+            3,
+            (
+                frozenset({0}),
+                frozenset({1, 2, 3}),
+                frozenset({0, 4}),
+                frozenset({2}),
+            ),
+            (0, 1, 2, 3),
+        )
+        build = build_cnf(reduced, 12, pairwise_distances(reduced))
+        # N=4, ceil(N/2)+1=3, and local job 1 is the unique argmax.
+        self.assertIn([-build.vars_y[1, 3]], build.cnf.clauses)
+        with Solver(name="cadical300", bootstrap_with=build.cnf.clauses) as solver:
+            self.assertFalse(solver.solve(assumptions=[build.vars_x[1, 3]]))
+
+    def test_symmetry_pivot_tie_uses_smallest_original_job_id(self):
+        reduced = ReducedInstance(
+            "symmetry-tie",
+            4,
+            2,
+            (frozenset({0, 1}), frozenset({2, 3}), frozenset({0})),
+            (3, 7, 9),
+        )
+        build = build_cnf(reduced, 6, pairwise_distances(reduced))
+        # Jobs 0 and 1 tie on |R|; original job 3 wins over original job 7.
+        self.assertIn([-build.vars_y[0, 3]], build.cnf.clauses)
+        self.assertNotIn([-build.vars_y[1, 3]], build.cnf.clauses)
 
     def test_magazine_counter_accepts_exactly_c_tools(self):
         _, build = self._build([{0}], 3, 2, 3)

@@ -7,11 +7,21 @@ Exact solver for the Job Sequencing and Tool Switching Problem described in
 KTNS evaluation, a SAT encoding, and a strict descending search with PySAT's
 CaDiCaL 3.0 backend.
 
-At-most-one job constraints for each position and the global insertion bound
-are encoded with PySAT sequential counters using the same variable pool.
-From position 2 onward, an inserted tool must be required by the job at that
-position; position 1 remains exempt so the initial magazine can contain filler
-tools when a job requires fewer than `c` tools.
+The encoding is split into a mandatory core and four optional constraint
+groups: `symmetry`, `insertion-requirement`, `adjacency`, and
+`required-transition`. All four are enabled by default. Use `--core-only` to
+disable them, or repeat `--enable-constraint NAME` to enable only a selected
+subset:
+
+```bash
+uv run ssp-sat data/dummy.txt --core-only
+uv run ssp-sat data/dummy.txt \
+  --enable-constraint symmetry \
+  --enable-constraint adjacency
+```
+
+At-most-one job constraints for each position and the standard-mode global
+insertion bound use PySAT sequential counters with the shared variable pool.
 
 `min`, `max`, and `best known value ...` lines in benchmark files are ignored.
 Only `n`, `m`, `c`, the problem blocks, and their Boolean matrices affect a
@@ -68,6 +78,12 @@ respected; `_interupt` is inserted before its extension when interrupted.
 The input can be one benchmark file or a directory searched recursively. A CSV
 summary is written to `ssp_result_YYYY-MM-DD-HH-MM-SS.csv` by default. Every
 problem in every selected file is solved independently.
+
+Per-iteration console output and per-problem CSV output include CaDiCaL
+`restarts`, `conflicts`, `decisions`, and `propagations` statistics. If a
+CaDiCaL process is killed on timeout or interruption before returning its
+statistics, these fields are reported as `N/A`, not as zero. The CSV also has
+one Boolean column for each optional constraint.
 
 ## Test
 

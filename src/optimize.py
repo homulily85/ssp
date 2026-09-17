@@ -6,8 +6,14 @@ from .distances import pairwise_distances
 from .dominance import preprocess_dominance
 from .encoding import adjacency_clauses, build_cnf, build_incremental_cnf
 from .ktns import ktns
-from .model import IterationResult, OptimizationResult, SSPInstance, SolverResult
-from .solver import IncrementalSolverSession, solve_cnf
+from .model import (
+    AdditionalConstraints,
+    IterationResult,
+    OptimizationResult,
+    SSPInstance,
+    SolverResult,
+)
+from .solver import IncrementalSolverSession, solve_cnf, unavailable_solver_stats
 from .upper_bound import construct_upper_bound
 from .validate import validate_sat_solution
 
@@ -24,10 +30,16 @@ def optimize_instance(
     time_limit: float = 600.0,
     *,
     incremental: bool = False,
+    additional_constraints: AdditionalConstraints | None = None,
 ) -> OptimizationResult:
     if time_limit <= 0:
         raise ValueError("time limit must be greater than zero")
     started = perf_counter()
+    constraints = (
+        additional_constraints
+        if additional_constraints is not None
+        else AdditionalConstraints.all()
+    )
     dominance = preprocess_dominance(instance)
     distances = pairwise_distances(dominance.reduced)
     upper = construct_upper_bound(instance, dominance, distances)
@@ -52,17 +64,24 @@ def optimize_instance(
                         variables=0,
                         clauses=0,
                         solve_time=0.0,
-                        stats={},
+                        stats=unavailable_solver_stats(),
                     )
                 )
                 status = "TIMEOUT"
                 break
-            build = build_cnf(dominance.reduced, k, distances)
+            build = build_cnf(
+                dominance.reduced,
+                k,
+                distances,
+                additional_constraints=constraints,
+            )
             remaining = time_limit - (perf_counter() - started)
             solved = (
                 solve_cnf(build, time_limit=remaining)
                 if remaining > 0
-                else SolverResult("TIMEOUT", 0.0, None, {})
+                else SolverResult(
+                    "TIMEOUT", 0.0, None, unavailable_solver_stats()
+                )
             )
             iterations.append(
                 IterationResult(
@@ -102,12 +121,17 @@ def optimize_instance(
                     variables=0,
                     clauses=0,
                     solve_time=0.0,
-                    stats={},
+                    stats=unavailable_solver_stats(),
                 )
             )
             status = "TIMEOUT"
         else:
-            build = build_incremental_cnf(dominance.reduced, first_k, distances)
+            build = build_incremental_cnf(
+                dominance.reduced,
+                first_k,
+                distances,
+                additional_constraints=constraints,
+            )
             remaining = time_limit - (perf_counter() - started)
             if remaining <= 0:
                 iterations.append(
@@ -119,7 +143,7 @@ def optimize_instance(
                         variables=build.variable_counts["total"],
                         clauses=len(build.cnf.clauses),
                         solve_time=0.0,
-                        stats={},
+                        stats=unavailable_solver_stats(),
                     )
                 )
                 status = "TIMEOUT"
@@ -138,14 +162,18 @@ def optimize_instance(
                                     variables=build.variable_counts["total"],
                                     clauses=len(build.cnf.clauses) + len(added_adjacency),
                                     solve_time=0.0,
-                                    stats={},
+                                    stats=unavailable_solver_stats(),
                                 )
                             )
                             status = "TIMEOUT"
                             break
 
-                        active_adjacency = adjacency_clauses(
-                            dominance.reduced, distances, k, build.vars_x
+                        active_adjacency = (
+                            adjacency_clauses(
+                                dominance.reduced, distances, k, build.vars_x
+                            )
+                            if constraints.adjacency
+                            else []
                         )
                         new_adjacency = [
                             clause
@@ -170,7 +198,7 @@ def optimize_instance(
                                     variables=build.variable_counts["total"],
                                     clauses=len(build.cnf.clauses) + len(added_adjacency),
                                     solve_time=0.0,
-                                    stats={},
+                                    stats=unavailable_solver_stats(),
                                 )
                             )
                             status = "TIMEOUT"
@@ -220,6 +248,7 @@ def optimize_instance(
         instance=instance,
         dominance=dominance,
         mode="incremental" if incremental else "standard",
+        additional_constraints=constraints.enabled_names(),
         status=status,
         lower_bound=lb,
         initial_upper_bound=upper.cost,

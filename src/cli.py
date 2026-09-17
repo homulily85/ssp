@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from .model import ADDITIONAL_CONSTRAINT_NAMES, AdditionalConstraints
 from .optimize import optimize_instance
 from .parser import SSPParseError, discover_input_files, parse_file
 from .report import print_result, write_csv
@@ -25,6 +26,24 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--incremental",
         action="store_true",
         help="reuse one CaDiCaL solver with an iterative totalizer",
+    )
+    constraints = parser.add_mutually_exclusive_group()
+    constraints.add_argument(
+        "--enable-constraint",
+        action="append",
+        choices=ADDITIONAL_CONSTRAINT_NAMES,
+        dest="enabled_constraints",
+        metavar="NAME",
+        help=(
+            "enable one optional constraint; repeat to enable several "
+            "(symmetry, insertion-requirement, adjacency, or "
+            "required-transition; default: enable all)"
+        ),
+    )
+    constraints.add_argument(
+        "--core-only",
+        action="store_true",
+        help="disable every optional constraint and use only the core encoding",
     )
     output = parser.add_mutually_exclusive_group()
     output.add_argument(
@@ -50,6 +69,14 @@ def _csv_output_path(
 
 def main(argv: list[str] | None = None) -> int:
     args = build_argument_parser().parse_args(argv)
+    if args.core_only:
+        additional_constraints = AdditionalConstraints.none()
+    elif args.enabled_constraints is None:
+        additional_constraints = AdditionalConstraints.all()
+    else:
+        additional_constraints = AdditionalConstraints.from_names(
+            args.enabled_constraints
+        )
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     csv_path = _csv_output_path(args.csv, timestamp, interrupted=False)
     interrupted_csv_path = _csv_output_path(args.csv, timestamp, interrupted=True)
@@ -72,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
                 instance,
                 time_limit=args.limit,
                 incremental=args.incremental,
+                additional_constraints=additional_constraints,
             )
             results.append(result)
             print_result(result, sys.stdout)

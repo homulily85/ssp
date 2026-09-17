@@ -13,6 +13,21 @@ class SolverConfigurationError(RuntimeError):
     pass
 
 
+_TRACKED_STATS = ("restarts", "conflicts", "decisions", "propagations")
+
+
+def _with_tracked_stats(stats: dict[str, int | float]) -> dict[str, int | float]:
+    normalized = dict(stats)
+    for key in _TRACKED_STATS:
+        normalized.setdefault(key, 0)
+    return normalized
+
+
+def unavailable_solver_stats() -> dict[str, None]:
+    """Return explicit unknown values when a killed worker cannot report stats."""
+    return {key: None for key in _TRACKED_STATS}
+
+
 def _solver_worker(clauses: list[list[int]], sender: Connection) -> None:
     """Run CaDiCaL in an isolated process and return a serializable result."""
     try:
@@ -25,7 +40,7 @@ def _solver_worker(clauses: list[list[int]], sender: Connection) -> None:
                 "SAT" if satisfiable else "UNSAT",
                 float(solver.time()),
                 tuple(solver.get_model()) if satisfiable else None,
-                dict(solver.accum_stats() or {}),
+                _with_tracked_stats(dict(solver.accum_stats() or {})),
             )
         sender.send(payload)
     except BaseException as exc:
@@ -45,6 +60,7 @@ def _incremental_solver_worker(
         with Solver(
             name="cadical300", bootstrap_with=clauses, use_timer=True
         ) as solver:
+            previous_stats: dict[str, int | float] = {}
             while True:
                 command = channel.recv()
                 if command[0] == "STOP":
@@ -55,13 +71,22 @@ def _incremental_solver_worker(
                 if new_clauses:
                     solver.append_formula(new_clauses)
                 satisfiable = solver.solve(assumptions=assumptions)
+                cumulative_stats = _with_tracked_stats(
+                    dict(solver.accum_stats() or {})
+                )
+                iteration_stats = dict(cumulative_stats)
+                for key in _TRACKED_STATS:
+                    iteration_stats[key] = (
+                        cumulative_stats[key] - previous_stats.get(key, 0)
+                    )
+                previous_stats = cumulative_stats
                 channel.send(
                     (
                         "RESULT",
                         "SAT" if satisfiable else "UNSAT",
                         float(solver.time()),
                         tuple(solver.get_model()) if satisfiable else None,
-                        dict(solver.accum_stats() or {}),
+                        iteration_stats,
                     )
                 )
     except EOFError:
@@ -114,7 +139,9 @@ def solve_cnf(build: CNFBuildResult, time_limit: float = 600.0) -> SolverResult:
                 )
             else:
                 _stop_process(process)
-                return SolverResult("TIMEOUT", elapsed, None, {})
+                return SolverResult(
+                    "TIMEOUT", elapsed, None, unavailable_solver_stats()
+                )
 
         try:
             payload = receiver.recv()
@@ -186,7 +213,12 @@ class IncrementalSolverSession:
             remaining = time_limit - (perf_counter() - started)
             if remaining <= 0:
                 self.close(force=True)
-                return SolverResult("TIMEOUT", perf_counter() - started, None, {})
+                return SolverResult(
+                    "TIMEOUT",
+                    perf_counter() - started,
+                    None,
+                    unavailable_solver_stats(),
+                )
             ready = wait(
                 [self._channel, self._process.sentinel], timeout=remaining
             )
@@ -202,7 +234,9 @@ class IncrementalSolverSession:
                     )
                 else:
                     self.close(force=True)
-                    return SolverResult("TIMEOUT", elapsed, None, {})
+                    return SolverResult(
+                        "TIMEOUT", elapsed, None, unavailable_solver_stats()
+                    )
             try:
                 payload = self._channel.recv()
             except EOFError as exc:
