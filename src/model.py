@@ -51,6 +51,8 @@ class CNFBuildResult:
     vars_s: dict[tuple[int, int, int], int]
     variable_counts: dict[str, int]
     immediate_unsat: bool = False
+    totalizer_rhs: tuple[int, ...] = ()
+    t_literal_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,11 +88,14 @@ class IterationResult:
 class OptimizationResult:
     instance: SSPInstance
     dominance: DominanceResult
+    mode: str
+    status: str
     lower_bound: int
     initial_upper_bound: int
     initial_reduced_sequence: tuple[int, ...]
     initial_sequence: tuple[int, ...]
-    optimum: int
+    best_cost: int
+    optimum: int | None
     optimal_reduced_sequence: tuple[int, ...]
     optimal_sequence: tuple[int, ...]
     verification_cost: int

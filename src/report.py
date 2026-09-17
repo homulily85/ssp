@@ -11,11 +11,14 @@ from .model import OptimizationResult
 
 CSV_FIELDS = (
     "problem",
+    "mode",
+    "status",
     "n",
     "n_reduced",
     "dominated",
     "lb",
     "initial_ub",
+    "best_cost",
     "optimum",
     "sat_calls",
     "total_vars_last",
@@ -28,6 +31,7 @@ CSV_FIELDS = (
 def print_result(result: OptimizationResult, stream: TextIO) -> None:
     dominance = result.dominance
     print(f"Problem: {result.instance.name}", file=stream)
+    print(f"Mode: {result.mode}", file=stream)
     print(
         f"Original jobs: {result.instance.n} | Reduced jobs: {len(dominance.active_jobs)} | "
         f"Dominated jobs: {len(dominance.dominator)}",
@@ -45,9 +49,15 @@ def print_result(result: OptimizationResult, stream: TextIO) -> None:
             f"clauses={item.clauses} solve_time={item.solve_time:.6f}s",
             file=stream,
         )
-    print(f"Optimal cost: {result.optimum}", file=stream)
-    print(f"Optimal reduced sequence: {list(result.optimal_reduced_sequence)}", file=stream)
-    print(f"Optimal reconstructed sequence: {list(result.optimal_sequence)}", file=stream)
+    print(f"Status: {result.status}", file=stream)
+    if result.status == "OPTIMAL":
+        print(f"Optimal cost: {result.optimum}", file=stream)
+        print(f"Optimal reduced sequence: {list(result.optimal_reduced_sequence)}", file=stream)
+        print(f"Optimal reconstructed sequence: {list(result.optimal_sequence)}", file=stream)
+    else:
+        print(f"Best known cost: {result.best_cost}", file=stream)
+        print(f"Best reduced sequence: {list(result.optimal_reduced_sequence)}", file=stream)
+        print(f"Best reconstructed sequence: {list(result.optimal_sequence)}", file=stream)
     print(f"KTNS verification cost: {result.verification_cost}", file=stream)
     print(f"Total runtime: {result.total_runtime:.6f}s", file=stream)
     print(file=stream)
@@ -57,12 +67,15 @@ def _csv_row(result: OptimizationResult) -> dict[str, object]:
     last = result.iterations[-1] if result.iterations else None
     return {
         "problem": result.instance.name,
+        "mode": result.mode,
+        "status": result.status,
         "n": result.instance.n,
         "n_reduced": len(result.dominance.active_jobs),
         "dominated": len(result.dominance.dominator),
         "lb": result.lower_bound,
         "initial_ub": result.initial_upper_bound,
-        "optimum": result.optimum,
+        "best_cost": result.best_cost,
+        "optimum": result.optimum if result.optimum is not None else "",
         "sat_calls": len(result.iterations),
         "total_vars_last": last.variables if last else 0,
         "total_clauses_last": last.clauses if last else 0,

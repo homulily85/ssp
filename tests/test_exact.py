@@ -20,7 +20,10 @@ class ExactEndToEndTests(unittest.TestCase):
             with self.subTest(instance=instance.name):
                 expected, _ = brute_force_optimum(instance)
                 actual = optimize_instance(instance)
+                incremental = optimize_instance(instance, incremental=True)
                 self.assertEqual(actual.optimum, expected)
+                self.assertEqual(incremental.optimum, expected)
+                self.assertEqual(incremental.mode, "incremental")
                 self.assertEqual(actual.verification_cost, expected)
 
     def test_seeded_random_instances_match_exhaustive_search(self):
@@ -37,7 +40,9 @@ class ExactEndToEndTests(unittest.TestCase):
             with self.subTest(instance=instance.name):
                 expected, _ = brute_force_optimum(instance)
                 result = optimize_instance(instance)
+                incremental = optimize_instance(instance, incremental=True)
                 self.assertEqual(result.optimum, expected)
+                self.assertEqual(incremental.optimum, expected)
 
 
 if __name__ == "__main__":

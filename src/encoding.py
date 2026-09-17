@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pysat.card import CardEnc, EncType
+from pysat.card import CardEnc, EncType, ITotalizer
 from pysat.formula import CNF, IDPool
 
 from .model import CNFBuildResult, ReducedInstance
@@ -10,6 +10,9 @@ def build_cnf(
     instance: ReducedInstance,
     k: int,
     d_matrix: tuple[tuple[int, ...], ...],
+    *,
+    include_adjacency: bool = True,
+    include_global_cardinality: bool = True,
 ) -> CNFBuildResult:
     cnf = CNF()
     vpool = IDPool()
@@ -45,6 +48,7 @@ def build_cnf(
 
     primary_count = len(vars_x) + len(vars_y) + len(vars_z) + len(vars_t)
     named_auxiliary_count = len(vars_s)
+    named_variables_top = vpool.top
 
     # 1. y boundaries.
     for i in range(n):
@@ -62,11 +66,18 @@ def build_cnf(
             x, y, y_next = vars_x[i, j], vars_y[i, j], vars_y[i, j + 1]
             cnf.extend([[-x, y], [-x, -y_next], [-y, y_next, x]])
 
-    # 4. Pairwise at-most-one job per position.
+    # 4. Sequential-counter at-most-one job per position.
     for j in range(1, n + 1):
-        for i in range(n):
-            for h in range(i + 1, n):
-                cnf.append([-vars_x[i, j], -vars_x[h, j]])
+        position_literals = [vars_x[i, j] for i in range(n)]
+        if len(position_literals) > 1:
+            position_amo = CardEnc.atmost(
+                lits=position_literals,
+                bound=1,
+                vpool=vpool,
+                encoding=EncType.seqcounter,
+            )
+            cnf.extend(position_amo.clauses)
+    position_amo_auxiliary_count = vpool.top - named_variables_top
 
     # 5. Job requirements.
     for i, required in enumerate(instance.requirements):
@@ -109,29 +120,115 @@ def build_cnf(
             for u in sorted(required):
                 cnf.append([-vars_x[i, j], vars_z[u, j - 1], vars_t[u, j]])
 
-    # 10. Bound-dependent adjacency pruning.
-    for i in range(n):
-        for h in range(n):
-            if i != h and c + d_matrix[i][h] > k:
-                for j in range(1, n):
-                    cnf.append([-vars_x[i, j], -vars_x[h, j + 1]])
+    # 10. From the second position onward, every inserted tool must be
+    # required by the job scheduled at that position. Position 1 is excluded
+    # because its C initial insertions may include filler tools.
+    jobs_requiring_tool = [
+        [i for i, required in enumerate(instance.requirements) if u in required]
+        for u in range(m)
+    ]
+    for j in range(2, n + 1):
+        for u in range(m):
+            cnf.append(
+                [-vars_t[u, j]]
+                + [vars_x[i, j] for i in jobs_requiring_tool[u]]
+            )
 
-    # 11. Global sequential counter over insertion literals.
+    # 11. Bound-dependent adjacency pruning.
+    if include_adjacency:
+        cnf.extend(adjacency_clauses(instance, d_matrix, k, vars_x))
+
+    # 12. Global sequential counter over insertion literals.
     t_literals = [vars_t[u, j] for j in range(1, n + 1) for u in range(m)]
     before_cardinality = vpool.top
-    if k < len(t_literals):
+    if include_global_cardinality and k < len(t_literals):
         card = CardEnc.atmost(lits=t_literals, bound=k, vpool=vpool, encoding=EncType.seqcounter)
         cnf.extend(card.clauses)
     card_auxiliary_count = vpool.top - before_cardinality
-    auxiliary_count = named_auxiliary_count + card_auxiliary_count
+    auxiliary_count = (
+        named_auxiliary_count
+        + position_amo_auxiliary_count
+        + card_auxiliary_count
+    )
     counts = {
         "primary": primary_count,
         "auxiliary": auxiliary_count,
         "named_auxiliary": named_auxiliary_count,
+        "position_amo_auxiliary": position_amo_auxiliary_count,
         "cardinality_auxiliary": card_auxiliary_count,
         "total": vpool.top,
         "clauses": len(cnf.clauses),
     }
     return CNFBuildResult(
-        cnf, vpool, vars_x, vars_y, vars_z, vars_t, vars_s, counts
+        cnf,
+        vpool,
+        vars_x,
+        vars_y,
+        vars_z,
+        vars_t,
+        vars_s,
+        counts,
+        t_literal_count=len(t_literals),
     )
+
+
+def adjacency_clauses(
+    instance: ReducedInstance,
+    d_matrix: tuple[tuple[int, ...], ...],
+    k: int,
+    vars_x: dict[tuple[int, int], int],
+) -> list[list[int]]:
+    """Return deterministic bound-dependent adjacency clauses."""
+    clauses: list[list[int]] = []
+    for i in range(instance.n):
+        for h in range(instance.n):
+            if i != h and instance.c + d_matrix[i][h] > k:
+                for j in range(1, instance.n):
+                    clauses.append([-vars_x[i, j], -vars_x[h, j + 1]])
+    return clauses
+
+
+def build_incremental_cnf(
+    instance: ReducedInstance,
+    max_k: int,
+    d_matrix: tuple[tuple[int, ...], ...],
+) -> CNFBuildResult:
+    """Build bound-independent CNF plus one reusable iterative totalizer."""
+    build = build_cnf(
+        instance,
+        max_k,
+        d_matrix,
+        include_adjacency=False,
+        include_global_cardinality=False,
+    )
+    if build.immediate_unsat:
+        return build
+
+    t_literals = [
+        build.vars_t[u, j]
+        for j in range(1, instance.n + 1)
+        for u in range(instance.m)
+    ]
+    max_encoded_bound = min(max_k, len(t_literals) - 1)
+    totalizer = ITotalizer(
+        lits=t_literals,
+        ubound=max_encoded_bound,
+        top_id=build.vpool.top,
+    )
+    try:
+        previous_top = build.vpool.top
+        build.cnf.extend(totalizer.cnf.clauses)
+        build.totalizer_rhs = tuple(totalizer.rhs)
+        build.t_literal_count = len(t_literals)
+        totalizer_auxiliary = totalizer.top_id - previous_top
+        # ITotalizer accepts top_id rather than IDPool. Synchronize the shared
+        # pool so any later allocation cannot collide with totalizer variables.
+        build.vpool.top = totalizer.top_id
+        build.variable_counts["cardinality_auxiliary"] = totalizer_auxiliary
+        build.variable_counts["itotalizer_auxiliary"] = totalizer_auxiliary
+        build.variable_counts["auxiliary"] += totalizer_auxiliary
+        build.variable_counts["total"] = totalizer.top_id
+        build.variable_counts["clauses"] = len(build.cnf.clauses)
+    finally:
+        totalizer.delete()
+    return build
