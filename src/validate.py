@@ -3,81 +3,94 @@ from __future__ import annotations
 from .dominance import reconstruct_sequence
 from .ktns import ktns
 from .model import (
-    CNFBuildResult,
     DominanceResult,
     SSPInstance,
+    TSPBuildResult,
     ValidationResult,
 )
+from .subtour import decode_hamiltonian_sequence, decode_successor, find_cycles
 
 
-def decode_reduced_sequence(
-    model: tuple[int, ...] | list[int],
-    vars_x: dict[tuple[int, int], int],
-    local_to_original: tuple[int, ...],
-) -> tuple[int, ...]:
-    positive = {literal for literal in model if literal > 0}
-    n = len(local_to_original)
-    local_sequence: list[int] = []
-    for position in range(1, n + 1):
-        jobs = [job for job in range(n) if vars_x[job, position] in positive]
-        if len(jobs) != 1:
-            raise AssertionError(
-                f"position {position} has {len(jobs)} jobs in decoded SAT model"
-            )
-        local_sequence.append(jobs[0])
-    if set(local_sequence) != set(range(n)):
-        raise AssertionError("decoded reduced sequence is not a permutation")
-    return tuple(local_to_original[job] for job in local_sequence)
-
-
-def validate_sat_solution(
+def validate_tsp_solution(
     original: SSPInstance,
     dominance: DominanceResult,
-    build: CNFBuildResult,
+    build: TSPBuildResult,
     model: tuple[int, ...] | list[int],
     k: int,
 ) -> ValidationResult:
+    """Independently verify a Hamiltonian TSP-SSP SAT model.
+
+    This routine deliberately recomputes every magazine transition from z and
+    x.  It never relies on clauses emitted by the encoder to justify a model.
+    """
+    reduced = dominance.reduced
     positive = {literal for literal in model if literal > 0}
-    representative_sequence = decode_reduced_sequence(
-        model, build.vars_x, dominance.local_to_original
+    successor = decode_successor(model, build.vars_x, reduced.n)
+    cycles = find_cycles(successor)
+    if len(cycles) != 1 or len(cycles[0]) != reduced.n + 1 or 0 not in cycles[0]:
+        raise AssertionError("SAT model is a cycle cover rather than a Hamiltonian cycle")
+
+    vertices = decode_hamiltonian_sequence(successor, reduced.n)
+    local_sequence = tuple(vertex - 1 for vertex in vertices)
+    representative_sequence = tuple(
+        reduced.local_to_original[local] for local in local_sequence
     )
-    local_sequence = tuple(
-        dominance.original_to_local[representative] for representative in representative_sequence
-    )
-    n, m, c = dominance.reduced.n, original.m, original.c
-    previous = {tool for tool in range(m) if build.vars_z[tool, 0] in positive}
-    if previous:
-        raise AssertionError("SAT model does not have an empty initial magazine")
+    if set(local_sequence) != set(range(reduced.n)):
+        raise AssertionError("decoded TSP sequence is not a reduced-job permutation")
+
+    magazines: list[frozenset[int]] = []
+    inserted: list[frozenset[int]] = []
+    previous: set[int] = set()
     sat_cost = 0
-    for position, local_job in enumerate(local_sequence, 1):
+    for position, (vertex, local_job) in enumerate(zip(vertices, local_sequence)):
         magazine = {
-            tool for tool in range(m) if build.vars_z[tool, position] in positive
+            tool for tool in range(reduced.m) if build.vars_z[tool, vertex] in positive
         }
-        if len(magazine) != c:
-            raise AssertionError(f"SAT magazine at position {position} has wrong capacity")
-        required = dominance.reduced.requirements[local_job]
+        required = reduced.requirements[local_job]
+        if len(magazine) != reduced.c:
+            raise AssertionError(
+                f"SAT magazine for vertex {vertex} has {len(magazine)} tools, expected {reduced.c}"
+            )
         if not required <= magazine:
-            raise AssertionError(f"SAT magazine at position {position} misses required tools")
-        for tool in range(m):
-            expected_t = tool in magazine and tool not in previous
-            if build.vars_t:
-                actual_t = build.vars_t[tool, position] in positive
-                if actual_t != expected_t:
-                    raise AssertionError(
-                        f"incorrect t[{tool},{position}] in SAT model: "
-                        f"{actual_t} != {expected_t}"
-                    )
-            sat_cost += int(expected_t)
+            raise AssertionError(f"SAT magazine for vertex {vertex} misses required tools")
+
+        expected_inserted = magazine if position == 0 else magazine - previous
+        actual_inserted = {
+            tool for tool in range(reduced.m) if build.vars_t[tool, vertex] in positive
+        }
+        if actual_inserted != expected_inserted:
+            raise AssertionError(
+                f"incorrect insertion set for vertex {vertex}: "
+                f"{sorted(actual_inserted)} != {sorted(expected_inserted)}"
+            )
+        magazines.append(frozenset(magazine))
+        inserted.append(frozenset(actual_inserted))
+        sat_cost += len(actual_inserted)
         previous = magazine
+
     if sat_cost > k:
-        raise AssertionError(f"SAT cost {sat_cost} exceeds bound {k}")
+        raise AssertionError(f"SAT insertion cost {sat_cost} exceeds bound {k}")
 
     full_sequence = reconstruct_sequence(representative_sequence, dominance)
-    full_cost, configs = ktns(
-        full_sequence, original.requirements, original.m, original.c
+    ktns_cost, ktns_magazines = ktns(
+        full_sequence,
+        original.requirements,
+        original.m,
+        original.c,
     )
-    if full_cost > k:
-        raise AssertionError(f"reconstructed KTNS cost {full_cost} exceeds bound {k}")
+    # A dominated job can reuse its representative's magazine.  KTNS on the
+    # reconstructed full sequence therefore cannot be worse than the decoded
+    # reduced SAT policy.
+    if ktns_cost > sat_cost:
+        raise AssertionError(
+            f"reconstructed KTNS cost {ktns_cost} exceeds SAT cost {sat_cost}"
+        )
     return ValidationResult(
-        representative_sequence, full_sequence, sat_cost, full_cost, configs
+        reduced_sequence=representative_sequence,
+        full_sequence=full_sequence,
+        sat_cost=sat_cost,
+        ktns_cost=ktns_cost,
+        magazine_configs=tuple(magazines),
+        inserted_tools=tuple(inserted),
+        ktns_magazine_configs=ktns_magazines,
     )

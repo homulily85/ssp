@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ssp-sat"
 version = "0.1.0"
-description = "Exact SAT/MaxSAT solver for the Job Sequencing and Tool Switching Problem"
+description = "Exact TSP-SAT + CEGAR solver for the Job Sequencing and Tool Switching Problem"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

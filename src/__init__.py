@@ -1,4 +1,4 @@
-"""Exact SAT solver for the Job Sequencing and Tool Switching Problem."""
+"""Exact TSP-SAT + CEGAR solver for the Job Sequencing and Tool Switching Problem."""
 
 from .model import SSPInstance
 from .optimize import optimize_instance

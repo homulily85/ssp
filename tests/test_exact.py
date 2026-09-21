@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import random
 import io
+import random
 import unittest
 
-from src.model import ADDITIONAL_CONSTRAINT_NAMES, AdditionalConstraints
+from src.model import ALGORITHM
 from src.optimize import optimize_instance
 from src.report import print_result
 
@@ -12,105 +12,69 @@ from tests.helpers import brute_force_optimum, make_instance
 
 
 class ExactEndToEndTests(unittest.TestCase):
-    def test_solver_statistics_are_reported_in_every_mode(self):
+    def test_solver_statistics_and_cegar_fields_are_reported(self):
         instance = make_instance(
             [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "stats"
         )
-        for mode in ("standard", "incremental", "maxsat", "maxsat-no-t"):
-            result = optimize_instance(instance, mode=mode)
-            self.assertTrue(result.iterations)
-            for iteration in result.iterations:
-                for key in ("restarts", "conflicts", "decisions", "propagations"):
-                    self.assertIn(key, iteration.stats)
-            output = io.StringIO()
-            print_result(result, output)
+        result = optimize_instance(instance)
+        self.assertEqual(result.algorithm, ALGORITHM)
+        for iteration in result.iterations:
             for key in ("restarts", "conflicts", "decisions", "propagations"):
-                self.assertIn(f"{key}=", output.getvalue())
-
-    def test_maxsat_no_t_reports_objective_with_initial_capacity(self):
-        instance = make_instance(
-            [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "no-t-objective"
-        )
-        expected, _ = brute_force_optimum(instance)
-        result = optimize_instance(instance, mode="maxsat-no-t")
-        self.assertTrue(result.iterations)
-        self.assertEqual(result.iterations[-1].objective, expected)
-        self.assertEqual(result.optimum, expected)
-
+                self.assertIn(key, iteration.stats)
+            self.assertGreaterEqual(iteration.cegar_round, 1)
+            self.assertGreaterEqual(iteration.subtour_cuts_added, 0)
         output = io.StringIO()
         print_result(result, output)
-        self.assertIn(f"MaxSAT solve: objective={expected}", output.getvalue())
+        self.assertIn("Algorithm: tsp-sat-cegar", output.getvalue())
+        self.assertIn("cuts_total=", output.getvalue())
 
-    def test_hand_written_edge_cases(self):
+    def test_hand_written_cases(self):
         cases = [
-            make_instance([{0}, {0}, {0}], 2, 1, "duplicates"),
-            make_instance([{0}, {1}, {2}], 3, 3, "c-equals-m"),
-            make_instance([{0, 1}, {0}, {1}, {2}], 3, 2, "dominance"),
-            make_instance([{0}, {1}, {2}, {3}], 4, 2, "no-dominance"),
+            (make_instance([{0}], 1, 1, "one-job"), 1),
+            (make_instance([{0, 1}, {0, 1}, {0, 1}], 3, 2, "same-tools"), 2),
+            (make_instance([{0, 1}, {2, 3}], 4, 2, "disjoint"), 4),
+            (make_instance([{0, 1}, {0}, {1}, {2}], 3, 2, "dominance"), None),
+            (make_instance([{0}, {1}, {2}, {3}], 4, 2, "no-dominance"), None),
         ]
-        for instance in cases:
+        for instance, expected_cost in cases:
             with self.subTest(instance=instance.name):
                 expected, _ = brute_force_optimum(instance)
-                actual = optimize_instance(instance)
-                incremental = optimize_instance(instance, mode="incremental")
-                maxsat = optimize_instance(instance, mode="maxsat")
-                maxsat_no_t = optimize_instance(instance, mode="maxsat-no-t")
-                self.assertEqual(actual.optimum, expected)
-                self.assertEqual(incremental.optimum, expected)
-                self.assertEqual(maxsat.optimum, expected)
-                self.assertEqual(maxsat_no_t.optimum, expected)
-                self.assertEqual(incremental.mode, "incremental")
-                self.assertEqual(maxsat.mode, "maxsat")
-                self.assertEqual(maxsat_no_t.mode, "maxsat-no-t")
-                self.assertEqual(actual.verification_cost, expected)
-
-    def test_every_optional_constraint_selection_preserves_the_optimum(self):
-        instance = make_instance(
-            [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "constraint-flags"
-        )
-        expected, _ = brute_force_optimum(instance)
-        configurations = [AdditionalConstraints.none()] + [
-            AdditionalConstraints.from_names([name])
-            for name in ADDITIONAL_CONSTRAINT_NAMES
-        ]
-        for constraints in configurations:
-            for mode in ("standard", "incremental", "maxsat", "maxsat-no-t"):
-                with self.subTest(
-                    constraints=constraints.enabled_names(),
-                    mode=mode,
-                ):
-                    result = optimize_instance(
-                        instance,
-                        mode=mode,
-                        additional_constraints=constraints,
-                    )
-                    self.assertEqual(result.optimum, expected)
-                    self.assertEqual(
-                        result.additional_constraints,
-                        constraints.enabled_names(),
-                    )
+                result = optimize_instance(instance)
+                self.assertEqual(result.status, "OPTIMAL")
+                self.assertEqual(result.optimum, expected)
+                if expected_cost is not None:
+                    self.assertEqual(result.optimum, expected_cost)
+                self.assertEqual(result.verification_cost, expected)
 
     def test_seeded_random_instances_match_exhaustive_search(self):
-        randomizer = random.Random(20260917)
-        for case in range(8):
+        randomizer = random.Random(20260921)
+        for case in range(12):
             n = randomizer.randint(2, 6)
             m = randomizer.randint(3, 6)
             c = randomizer.randint(1, m)
-            requirements = []
-            for _ in range(n):
-                size = randomizer.randint(0, c)
-                requirements.append(set(randomizer.sample(range(m), size)))
+            requirements = [
+                set(randomizer.sample(range(m), randomizer.randint(0, c)))
+                for _ in range(n)
+            ]
             instance = make_instance(requirements, m, c, f"random-{case}")
             with self.subTest(instance=instance.name):
                 expected, _ = brute_force_optimum(instance)
                 result = optimize_instance(instance)
-                incremental = optimize_instance(instance, mode="incremental")
-                maxsat = optimize_instance(instance, mode="maxsat")
-                maxsat_no_t = optimize_instance(instance, mode="maxsat-no-t")
                 self.assertEqual(result.optimum, expected)
-                self.assertEqual(incremental.optimum, expected)
-                self.assertEqual(maxsat.optimum, expected)
-                self.assertEqual(maxsat_no_t.optimum, expected)
+                self.assertEqual(result.verification_cost, expected)
+
+    def test_sat_witness_can_skip_intermediate_bounds(self):
+        instance = make_instance(
+            [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "bound-jump"
+        )
+        result = optimize_instance(instance)
+        sat_witnesses = [
+            item
+            for item in result.iterations
+            if item.status == "SAT" and item.actual_solution_cost is not None
+        ]
+        for witness in sat_witnesses:
+            self.assertLessEqual(witness.actual_solution_cost, witness.k)
 
 
 if __name__ == "__main__":

@@ -9,17 +9,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.cli import _csv_output_path, build_argument_parser, main
+from src.model import ALGORITHM
 from src.optimize import optimize_instance
 
 from tests.helpers import make_instance
 
 
 class CLITests(unittest.TestCase):
-    def test_maxsat_no_t_mode_is_accepted(self):
-        args = build_argument_parser().parse_args(
-            ["instance.txt", "--mode", "maxsat-no-t"]
-        )
-        self.assertEqual(args.mode, "maxsat-no-t")
+    def test_legacy_mode_switch_is_not_accepted(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            build_argument_parser().parse_args(
+                ["instance.txt", "--mode", "incremental"]
+            )
 
     def test_timestamped_csv_names(self):
         timestamp = "2026-09-17-12-34-56"
@@ -36,7 +37,7 @@ class CLITests(unittest.TestCase):
             Path("custom_interupt.csv"),
         )
 
-    def test_file_input_writes_default_schema(self):
+    def test_file_input_writes_tsp_cegar_csv_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "simple.txt"
@@ -54,72 +55,11 @@ class CLITests(unittest.TestCase):
             with output.open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["algorithm"], ALGORITHM)
             self.assertEqual(rows[0]["optimum"], "2")
-            self.assertEqual(rows[0]["sat_calls"], "0")
-            self.assertEqual(rows[0]["restarts"], "0")
-            self.assertEqual(rows[0]["conflicts"], "0")
-            self.assertEqual(rows[0]["decisions"], "0")
-            self.assertEqual(rows[0]["propagations"], "0")
-
-    def test_mode_is_reported_in_csv(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "simple.txt"
-            output = root / "result.csv"
-            source.write_text(
-                "n=1\nm=1\nc=1\nproblem 1\n---\n1\n",
-                encoding="utf-8",
-            )
-            with redirect_stdout(io.StringIO()):
-                status = main(
-                    [
-                        str(source),
-                        "--mode",
-                        "incremental",
-                        "--csv",
-                        str(output),
-                    ]
-                )
-            self.assertEqual(status, 0)
-            with output.open(encoding="utf-8", newline="") as handle:
-                rows = list(csv.DictReader(handle))
-            self.assertEqual(rows[0]["mode"], "incremental")
-
-    def test_constraint_selection_is_reported_in_csv(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "simple.txt"
-            source.write_text(
-                "n=1\nm=1\nc=1\nproblem 1\n---\n1\n",
-                encoding="utf-8",
-            )
-            cases = (
-                ([], ("true", "true", "true", "true")),
-                (["--core-only"], ("false", "false", "false", "false")),
-                (
-                    [
-                        "--enable-constraint",
-                        "symmetry",
-                        "--enable-constraint",
-                        "adjacency",
-                    ],
-                    ("true", "false", "true", "false"),
-                ),
-            )
-            fields = (
-                "constraint_symmetry",
-                "constraint_insertion_requirement",
-                "constraint_adjacency",
-                "constraint_required_transition",
-            )
-            for index, (arguments, expected) in enumerate(cases):
-                output = root / f"result-{index}.csv"
-                with redirect_stdout(io.StringIO()):
-                    status = main([str(source), *arguments, "--csv", str(output)])
-                self.assertEqual(status, 0)
-                with output.open(encoding="utf-8", newline="") as handle:
-                    row = next(csv.DictReader(handle))
-                self.assertEqual(tuple(row[field] for field in fields), expected)
+            self.assertEqual(rows[0]["solver_calls"], "0")
+            self.assertEqual(rows[0]["cegar_rounds"], "0")
+            self.assertEqual(rows[0]["subtour_cuts"], "0")
 
     def test_keyboard_interrupt_writes_only_completed_instances(self):
         with tempfile.TemporaryDirectory() as directory:

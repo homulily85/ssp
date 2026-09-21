@@ -5,11 +5,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .model import (
-    ADDITIONAL_CONSTRAINT_NAMES,
-    OPTIMIZATION_MODES,
-    AdditionalConstraints,
-)
 from .optimize import optimize_instance
 from .parser import SSPParseError, discover_input_files, parse_file
 from .report import print_result, write_csv
@@ -18,7 +13,7 @@ from .solver import SolverConfigurationError
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Exact SAT/MaxSAT solver for SSP instances"
+        description="Exact TSP-SAT + CEGAR solver for SSP instances"
     )
     parser.add_argument("input", type=Path, help="input benchmark file or directory")
     parser.add_argument(
@@ -27,33 +22,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=600.0,
         metavar="SECONDS",
         help="time limit for each problem (default: 600 seconds)",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=OPTIMIZATION_MODES,
-        default="standard",
-        help=(
-            "optimization mode: rebuild SAT bounds, reuse an incremental "
-            "solver, or invoke either EvalMaxSAT encoding (default: standard)"
-        ),
-    )
-    constraints = parser.add_mutually_exclusive_group()
-    constraints.add_argument(
-        "--enable-constraint",
-        action="append",
-        choices=ADDITIONAL_CONSTRAINT_NAMES,
-        dest="enabled_constraints",
-        metavar="NAME",
-        help=(
-            "enable one optional constraint; repeat to enable several "
-            "(symmetry, insertion-requirement, adjacency, or "
-            "required-transition; default: enable all)"
-        ),
-    )
-    constraints.add_argument(
-        "--core-only",
-        action="store_true",
-        help="disable every optional constraint and use only the core encoding",
     )
     output = parser.add_mutually_exclusive_group()
     output.add_argument(
@@ -79,14 +47,6 @@ def _csv_output_path(
 
 def main(argv: list[str] | None = None) -> int:
     args = build_argument_parser().parse_args(argv)
-    if args.core_only:
-        additional_constraints = AdditionalConstraints.none()
-    elif args.enabled_constraints is None:
-        additional_constraints = AdditionalConstraints.all()
-    else:
-        additional_constraints = AdditionalConstraints.from_names(
-            args.enabled_constraints
-        )
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     csv_path = _csv_output_path(args.csv, timestamp, interrupted=False)
     interrupted_csv_path = _csv_output_path(args.csv, timestamp, interrupted=True)
@@ -100,17 +60,16 @@ def main(argv: list[str] | None = None) -> int:
         instances = []
         for path in files:
             try:
-                display = str(path.relative_to(args.input)) if args.input.is_dir() else str(path)
+                display = (
+                    str(path.relative_to(args.input))
+                    if args.input.is_dir()
+                    else str(path)
+                )
             except ValueError:
                 display = str(path)
             instances.extend(parse_file(path, name_prefix=display))
         for instance in instances:
-            result = optimize_instance(
-                instance,
-                time_limit=args.limit,
-                mode=args.mode,
-                additional_constraints=additional_constraints,
-            )
+            result = optimize_instance(instance, time_limit=args.limit)
             results.append(result)
             print_result(result, sys.stdout)
         if not args.no_csv:

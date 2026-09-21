@@ -11,11 +11,7 @@ from .model import OptimizationResult
 
 CSV_FIELDS = (
     "problem",
-    "mode",
-    "constraint_symmetry",
-    "constraint_insertion_requirement",
-    "constraint_adjacency",
-    "constraint_required_transition",
+    "algorithm",
     "status",
     "n",
     "n_reduced",
@@ -24,7 +20,9 @@ CSV_FIELDS = (
     "initial_ub",
     "best_cost",
     "optimum",
-    "sat_calls",
+    "solver_calls",
+    "cegar_rounds",
+    "subtour_cuts",
     "total_vars_last",
     "total_clauses_last",
     "sat_time",
@@ -41,18 +39,16 @@ _SOLVER_STATS = ("restarts", "conflicts", "decisions", "propagations")
 def print_result(result: OptimizationResult, stream: TextIO) -> None:
     dominance = result.dominance
     print(f"Problem: {result.instance.name}", file=stream)
-    print(f"Mode: {result.mode}", file=stream)
-    print(
-        "Additional constraints: "
-        + (", ".join(result.additional_constraints) or "(none)"),
-        file=stream,
-    )
+    print(f"Algorithm: {result.algorithm}", file=stream)
     print(
         f"Original jobs: {result.instance.n} | Reduced jobs: {len(dominance.active_jobs)} | "
         f"Dominated jobs: {len(dominance.dominator)}",
         file=stream,
     )
-    mapping = ", ".join(f"{job}->{representative}" for job, representative in sorted(dominance.dominator.items()))
+    mapping = ", ".join(
+        f"{job}->{representative}"
+        for job, representative in sorted(dominance.dominator.items())
+    )
     print(f"Dominance mapping: {mapping or '(none)'}", file=stream)
     print(f"Lower bound: {result.lower_bound}", file=stream)
     print(f"Greedy/KTNS upper bound: {result.initial_upper_bound}", file=stream)
@@ -61,26 +57,38 @@ def print_result(result: OptimizationResult, stream: TextIO) -> None:
         solver_stats = " ".join(
             f"{key}={_iteration_stat(item, key)}" for key in _SOLVER_STATS
         )
-        attempt = (
-            f"MaxSAT solve: objective={item.objective if item.objective is not None else 'N/A'}"
-            if item.k is None
-            else f"SAT iteration: k={item.k}"
-        )
+        cost = item.actual_solution_cost if item.actual_solution_cost is not None else "N/A"
         print(
-            f"{attempt} {item.status} primary_variables={item.primary_variables} "
-            f"auxiliary_variables={item.auxiliary_variables} total_variables={item.variables} "
-            f"clauses={item.clauses} solve_time={item.solve_time:.6f}s {solver_stats}",
+            f"SAT call: k={item.k} cegar={item.cegar_round} {item.status} "
+            f"subtours={item.subtours_found} cuts_added={item.subtour_cuts_added} "
+            f"cuts_total={item.total_subtour_cuts} actual_cost={cost} "
+            f"primary_variables={item.primary_variables} "
+            f"auxiliary_variables={item.auxiliary_variables} "
+            f"total_variables={item.variables} clauses={item.clauses} "
+            f"solve_time={item.solve_time:.6f}s {solver_stats}",
             file=stream,
         )
     print(f"Status: {result.status}", file=stream)
     if result.status == "OPTIMAL":
         print(f"Optimal cost: {result.optimum}", file=stream)
-        print(f"Optimal reduced sequence: {list(result.optimal_reduced_sequence)}", file=stream)
-        print(f"Optimal reconstructed sequence: {list(result.optimal_sequence)}", file=stream)
+        print(
+            f"Optimal reduced sequence: {list(result.optimal_reduced_sequence)}",
+            file=stream,
+        )
+        print(
+            f"Optimal reconstructed sequence: {list(result.optimal_sequence)}",
+            file=stream,
+        )
     else:
         print(f"Best known cost: {result.best_cost}", file=stream)
-        print(f"Best reduced sequence: {list(result.optimal_reduced_sequence)}", file=stream)
-        print(f"Best reconstructed sequence: {list(result.optimal_sequence)}", file=stream)
+        print(
+            f"Best reduced sequence: {list(result.optimal_reduced_sequence)}",
+            file=stream,
+        )
+        print(
+            f"Best reconstructed sequence: {list(result.optimal_sequence)}",
+            file=stream,
+        )
     print(f"KTNS verification cost: {result.verification_cost}", file=stream)
     print(f"Total runtime: {result.total_runtime:.6f}s", file=stream)
     print(file=stream)
@@ -88,18 +96,9 @@ def print_result(result: OptimizationResult, stream: TextIO) -> None:
 
 def _csv_row(result: OptimizationResult) -> dict[str, object]:
     last = result.iterations[-1] if result.iterations else None
-    enabled = set(result.additional_constraints)
     return {
         "problem": result.instance.name,
-        "mode": result.mode,
-        "constraint_symmetry": "true" if "symmetry" in enabled else "false",
-        "constraint_insertion_requirement": (
-            "true" if "insertion-requirement" in enabled else "false"
-        ),
-        "constraint_adjacency": "true" if "adjacency" in enabled else "false",
-        "constraint_required_transition": (
-            "true" if "required-transition" in enabled else "false"
-        ),
+        "algorithm": result.algorithm,
         "status": result.status,
         "n": result.instance.n,
         "n_reduced": len(result.dominance.active_jobs),
@@ -108,7 +107,9 @@ def _csv_row(result: OptimizationResult) -> dict[str, object]:
         "initial_ub": result.initial_upper_bound,
         "best_cost": result.best_cost,
         "optimum": result.optimum if result.optimum is not None else "",
-        "sat_calls": len(result.iterations),
+        "solver_calls": len(result.iterations),
+        "cegar_rounds": result.cegar_rounds,
+        "subtour_cuts": result.subtour_cuts,
         "total_vars_last": last.variables if last else 0,
         "total_clauses_last": last.clauses if last else 0,
         "sat_time": f"{result.sat_time:.9f}",
@@ -122,9 +123,7 @@ def _csv_row(result: OptimizationResult) -> dict[str, object]:
 
 def _iteration_stat(item, key: str) -> int | float | str:
     value = item.stats.get(key)
-    if value is None:
-        return "N/A"
-    return value
+    return "N/A" if value is None else value
 
 
 def _aggregate_stat(result: OptimizationResult, key: str) -> int | float | str:
