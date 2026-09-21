@@ -8,13 +8,19 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from src.cli import _csv_output_path, main
+from src.cli import _csv_output_path, build_argument_parser, main
 from src.optimize import optimize_instance
 
 from tests.helpers import make_instance
 
 
 class CLITests(unittest.TestCase):
+    def test_maxsat_no_t_mode_is_accepted(self):
+        args = build_argument_parser().parse_args(
+            ["instance.txt", "--mode", "maxsat-no-t"]
+        )
+        self.assertEqual(args.mode, "maxsat-no-t")
+
     def test_timestamped_csv_names(self):
         timestamp = "2026-09-17-12-34-56"
         self.assertEqual(
@@ -55,7 +61,7 @@ class CLITests(unittest.TestCase):
             self.assertEqual(rows[0]["decisions"], "0")
             self.assertEqual(rows[0]["propagations"], "0")
 
-    def test_incremental_flag_is_reported_in_csv(self):
+    def test_mode_is_reported_in_csv(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "simple.txt"
@@ -66,7 +72,13 @@ class CLITests(unittest.TestCase):
             )
             with redirect_stdout(io.StringIO()):
                 status = main(
-                    [str(source), "--incremental", "--csv", str(output)]
+                    [
+                        str(source),
+                        "--mode",
+                        "incremental",
+                        "--csv",
+                        str(output),
+                    ]
                 )
             self.assertEqual(status, 0)
             with output.open(encoding="utf-8", newline="") as handle:

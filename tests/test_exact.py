@@ -12,12 +12,12 @@ from tests.helpers import brute_force_optimum, make_instance
 
 
 class ExactEndToEndTests(unittest.TestCase):
-    def test_solver_statistics_are_available_in_both_modes(self):
+    def test_solver_statistics_are_reported_in_every_mode(self):
         instance = make_instance(
             [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "stats"
         )
-        for incremental in (False, True):
-            result = optimize_instance(instance, incremental=incremental)
+        for mode in ("standard", "incremental", "maxsat", "maxsat-no-t"):
+            result = optimize_instance(instance, mode=mode)
             self.assertTrue(result.iterations)
             for iteration in result.iterations:
                 for key in ("restarts", "conflicts", "decisions", "propagations"):
@@ -26,6 +26,20 @@ class ExactEndToEndTests(unittest.TestCase):
             print_result(result, output)
             for key in ("restarts", "conflicts", "decisions", "propagations"):
                 self.assertIn(f"{key}=", output.getvalue())
+
+    def test_maxsat_no_t_reports_objective_with_initial_capacity(self):
+        instance = make_instance(
+            [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "no-t-objective"
+        )
+        expected, _ = brute_force_optimum(instance)
+        result = optimize_instance(instance, mode="maxsat-no-t")
+        self.assertTrue(result.iterations)
+        self.assertEqual(result.iterations[-1].objective, expected)
+        self.assertEqual(result.optimum, expected)
+
+        output = io.StringIO()
+        print_result(result, output)
+        self.assertIn(f"MaxSAT solve: objective={expected}", output.getvalue())
 
     def test_hand_written_edge_cases(self):
         cases = [
@@ -38,10 +52,16 @@ class ExactEndToEndTests(unittest.TestCase):
             with self.subTest(instance=instance.name):
                 expected, _ = brute_force_optimum(instance)
                 actual = optimize_instance(instance)
-                incremental = optimize_instance(instance, incremental=True)
+                incremental = optimize_instance(instance, mode="incremental")
+                maxsat = optimize_instance(instance, mode="maxsat")
+                maxsat_no_t = optimize_instance(instance, mode="maxsat-no-t")
                 self.assertEqual(actual.optimum, expected)
                 self.assertEqual(incremental.optimum, expected)
+                self.assertEqual(maxsat.optimum, expected)
+                self.assertEqual(maxsat_no_t.optimum, expected)
                 self.assertEqual(incremental.mode, "incremental")
+                self.assertEqual(maxsat.mode, "maxsat")
+                self.assertEqual(maxsat_no_t.mode, "maxsat-no-t")
                 self.assertEqual(actual.verification_cost, expected)
 
     def test_every_optional_constraint_selection_preserves_the_optimum(self):
@@ -54,14 +74,14 @@ class ExactEndToEndTests(unittest.TestCase):
             for name in ADDITIONAL_CONSTRAINT_NAMES
         ]
         for constraints in configurations:
-            for incremental in (False, True):
+            for mode in ("standard", "incremental", "maxsat", "maxsat-no-t"):
                 with self.subTest(
                     constraints=constraints.enabled_names(),
-                    incremental=incremental,
+                    mode=mode,
                 ):
                     result = optimize_instance(
                         instance,
-                        incremental=incremental,
+                        mode=mode,
                         additional_constraints=constraints,
                     )
                     self.assertEqual(result.optimum, expected)
@@ -84,9 +104,13 @@ class ExactEndToEndTests(unittest.TestCase):
             with self.subTest(instance=instance.name):
                 expected, _ = brute_force_optimum(instance)
                 result = optimize_instance(instance)
-                incremental = optimize_instance(instance, incremental=True)
+                incremental = optimize_instance(instance, mode="incremental")
+                maxsat = optimize_instance(instance, mode="maxsat")
+                maxsat_no_t = optimize_instance(instance, mode="maxsat-no-t")
                 self.assertEqual(result.optimum, expected)
                 self.assertEqual(incremental.optimum, expected)
+                self.assertEqual(maxsat.optimum, expected)
+                self.assertEqual(maxsat_no_t.optimum, expected)
 
 
 if __name__ == "__main__":

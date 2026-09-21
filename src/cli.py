@@ -5,7 +5,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .model import ADDITIONAL_CONSTRAINT_NAMES, AdditionalConstraints
+from .model import (
+    ADDITIONAL_CONSTRAINT_NAMES,
+    OPTIMIZATION_MODES,
+    AdditionalConstraints,
+)
 from .optimize import optimize_instance
 from .parser import SSPParseError, discover_input_files, parse_file
 from .report import print_result, write_csv
@@ -13,7 +17,9 @@ from .solver import SolverConfigurationError
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Exact SAT solver for SSP instances")
+    parser = argparse.ArgumentParser(
+        description="Exact SAT/MaxSAT solver for SSP instances"
+    )
     parser.add_argument("input", type=Path, help="input benchmark file or directory")
     parser.add_argument(
         "--limit",
@@ -23,9 +29,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="time limit for each problem (default: 600 seconds)",
     )
     parser.add_argument(
-        "--incremental",
-        action="store_true",
-        help="reuse one CaDiCaL solver with an iterative totalizer",
+        "--mode",
+        choices=OPTIMIZATION_MODES,
+        default="standard",
+        help=(
+            "optimization mode: rebuild SAT bounds, reuse an incremental "
+            "solver, or invoke either EvalMaxSAT encoding (default: standard)"
+        ),
     )
     constraints = parser.add_mutually_exclusive_group()
     constraints.add_argument(
@@ -98,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
             result = optimize_instance(
                 instance,
                 time_limit=args.limit,
-                incremental=args.incremental,
+                mode=args.mode,
                 additional_constraints=additional_constraints,
             )
             results.append(result)

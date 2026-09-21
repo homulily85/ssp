@@ -4,16 +4,29 @@ from time import perf_counter
 
 from .distances import pairwise_distances
 from .dominance import preprocess_dominance
-from .encoding import adjacency_clauses, build_cnf, build_incremental_cnf
+from .encoding import (
+    adjacency_clauses,
+    build_cnf,
+    build_incremental_cnf,
+    build_maxsat_no_t_wcnf,
+    build_maxsat_wcnf,
+)
 from .ktns import ktns
 from .model import (
     AdditionalConstraints,
     IterationResult,
+    OPTIMIZATION_MODES,
+    OptimizationMode,
     OptimizationResult,
     SSPInstance,
     SolverResult,
 )
-from .solver import IncrementalSolverSession, solve_cnf, unavailable_solver_stats
+from .solver import (
+    IncrementalSolverSession,
+    solve_cnf,
+    solve_maxsat,
+    unavailable_solver_stats,
+)
 from .upper_bound import construct_upper_bound
 from .validate import validate_sat_solution
 
@@ -29,11 +42,13 @@ def optimize_instance(
     instance: SSPInstance,
     time_limit: float = 600.0,
     *,
-    incremental: bool = False,
+    mode: OptimizationMode = "standard",
     additional_constraints: AdditionalConstraints | None = None,
 ) -> OptimizationResult:
     if time_limit <= 0:
         raise ValueError("time limit must be greater than zero")
+    if mode not in OPTIMIZATION_MODES:
+        raise ValueError(f"unknown optimization mode: {mode}")
     started = perf_counter()
     constraints = (
         additional_constraints
@@ -51,7 +66,97 @@ def optimize_instance(
     iterations: list[IterationResult] = []
     status = "OPTIMAL"
 
-    if best_cost > lb and not incremental:
+    if best_cost > lb and mode in ("maxsat", "maxsat-no-t"):
+        remaining = time_limit - (perf_counter() - started)
+        if remaining <= 0:
+            iterations.append(
+                IterationResult(
+                    k=None,
+                    status="TIMEOUT",
+                    primary_variables=0,
+                    auxiliary_variables=0,
+                    variables=0,
+                    clauses=0,
+                    solve_time=0.0,
+                    stats=unavailable_solver_stats(),
+                )
+            )
+            status = "TIMEOUT"
+        else:
+            builder = (
+                build_maxsat_no_t_wcnf
+                if mode == "maxsat-no-t"
+                else build_maxsat_wcnf
+            )
+            maxsat_build = builder(
+                dominance.reduced,
+                upper.cost,
+                distances,
+                additional_constraints=constraints,
+            )
+            build = maxsat_build.core
+            remaining = time_limit - (perf_counter() - started)
+            solved = (
+                solve_maxsat(maxsat_build, time_limit=remaining)
+                if remaining > 0
+                else SolverResult(
+                    "TIMEOUT", 0.0, None, unavailable_solver_stats()
+                )
+            )
+            objective = (
+                solved.objective + instance.c
+                if mode == "maxsat-no-t" and solved.objective is not None
+                else solved.objective
+            )
+            iterations.append(
+                IterationResult(
+                    k=None,
+                    status=solved.status,
+                    primary_variables=build.variable_counts["primary"],
+                    auxiliary_variables=build.variable_counts["auxiliary"],
+                    variables=build.variable_counts["total"],
+                    clauses=len(maxsat_build.wcnf.hard)
+                    + len(maxsat_build.wcnf.soft),
+                    solve_time=solved.solve_time,
+                    stats=solved.stats,
+                    objective=objective,
+                )
+            )
+            if solved.status == "UNSAT":
+                raise AssertionError("MaxSAT hard clauses are unexpectedly unsatisfiable")
+            if solved.model is not None:
+                if objective is None:
+                    raise AssertionError("MaxSAT model did not contain an objective")
+                validated = validate_sat_solution(
+                    instance,
+                    dominance,
+                    build,
+                    solved.model,
+                    objective,
+                )
+                if validated.sat_cost != objective:
+                    raise AssertionError(
+                        "MaxSAT objective does not match magazine transitions: "
+                        f"{objective} != {validated.sat_cost}"
+                    )
+                if solved.status == "OPTIMAL" and (
+                    validated.ktns_cost != objective
+                ):
+                    raise AssertionError(
+                        "optimal reduced MaxSAT cost does not match reconstructed "
+                        f"KTNS cost: {objective} != {validated.ktns_cost}"
+                    )
+                if (validated.ktns_cost, validated.full_sequence) < (
+                    best_cost,
+                    best_full,
+                ):
+                    best_cost = validated.ktns_cost
+                    best_reduced = validated.reduced_sequence
+                    best_full = validated.full_sequence
+            if solved.status == "TIMEOUT":
+                status = "TIMEOUT"
+
+    if best_cost > lb and mode == "standard":
         for k in range(upper.cost - 1, lb - 1, -1):
             remaining = time_limit - (perf_counter() - started)
             if remaining <= 0:
@@ -108,7 +213,7 @@ def optimize_instance(
                 best_reduced = validated.reduced_sequence
                 best_full = validated.full_sequence
 
-    if best_cost > lb and incremental:
+    if best_cost > lb and mode == "incremental":
         first_k = upper.cost - 1
         remaining = time_limit - (perf_counter() - started)
         if remaining <= 0:
@@ -247,7 +352,7 @@ def optimize_instance(
     return OptimizationResult(
         instance=instance,
         dominance=dominance,
-        mode="incremental" if incremental else "standard",
+        mode=mode,
         additional_constraints=constraints.enabled_names(),
         status=status,
         lower_bound=lb,

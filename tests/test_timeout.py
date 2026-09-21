@@ -136,16 +136,37 @@ class TimeoutTests(unittest.TestCase):
             [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "incremental-timeout"
         )
         result = optimize_instance(
-            instance, time_limit=1e-9, incremental=True
+            instance, time_limit=1e-9, mode="incremental"
         )
         self.assertEqual(result.status, "TIMEOUT")
         self.assertEqual(result.mode, "incremental")
         self.assertIsNone(result.optimum)
 
+    def test_maxsat_optimizers_fall_back_to_greedy_after_timeout(self):
+        instance = make_instance(
+            [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "maxsat-timeout"
+        )
+        timeout = SolverResult("TIMEOUT", 0.01, None, {})
+        for mode in ("maxsat", "maxsat-no-t"):
+            with self.subTest(mode=mode), patch(
+                "src.optimize.solve_maxsat", return_value=timeout
+            ):
+                result = optimize_instance(instance, mode=mode)
+            self.assertEqual(result.status, "TIMEOUT")
+            self.assertEqual(result.mode, mode)
+            self.assertIsNone(result.optimum)
+            self.assertEqual(result.best_cost, result.initial_upper_bound)
+            self.assertIsNone(result.iterations[-1].k)
+
     def test_non_positive_limit_is_rejected(self):
         instance = make_instance([{0}], 1, 1)
         with self.assertRaises(ValueError):
             optimize_instance(instance, time_limit=0)
+
+    def test_unknown_optimization_mode_is_rejected(self):
+        instance = make_instance([{0}], 1, 1)
+        with self.assertRaises(ValueError):
+            optimize_instance(instance, mode="unknown")
 
 
 if __name__ == "__main__":

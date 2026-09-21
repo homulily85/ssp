@@ -14,18 +14,22 @@ Pipeline hiện tại:
   -> dominance preprocessing
   -> tính lower bound và pairwise distance
   -> all-start greedy + KTNS để lấy upper bound
-  -> linear descending SAT search
+  -> standard/incremental SAT hoặc MaxSAT optimization
   -> decode và kiểm tra model độc lập
   -> reconstruction về đầy đủ original jobs
   -> KTNS verification
   -> console + CSV
 ```
 
-Chương trình hỗ trợ hai chế độ tối ưu:
+Chương trình hỗ trợ bốn chế độ tối ưu:
 
 - `standard`: tạo CNF và một CaDiCaL worker mới cho từng bound;
 - `incremental`: tạo một `ITotalizer`, giữ một CaDiCaL worker và learned state
-  xuyên suốt các bound của một problem.
+  xuyên suốt các bound của một problem;
+- `maxsat`: tạo một WCNF với insertion variables `t` và gọi
+  `bin/EvalMaxSAT_bin` đúng một lần;
+- `maxsat-no-t`: tạo WCNF không có biến `t`, đo insertion trực tiếp bằng
+  transition của `z` và gọi cùng EvalMaxSAT binary.
 
 CaDiCaL luôn chạy trong process riêng để chương trình có thể tự quản lý timeout
 và `KeyboardInterrupt`. Chương trình không dùng time-limit API của PySAT.
@@ -35,7 +39,8 @@ và `KeyboardInterrupt`. Chương trình không dùng time-limit API của PySAT
 Yêu cầu:
 
 - Python `>=3.11`;
-- `python-sat` có backend `cadical300`.
+- `python-sat` có backend `cadical300`;
+- `bin/EvalMaxSAT_bin` executable khi dùng một trong hai MaxSAT mode.
 
 Đồng bộ môi trường và chạy console entry point:
 
@@ -53,7 +58,8 @@ Hoặc chạy bằng package Python từ repository:
 Cú pháp CLI:
 
 ```text
-ssp-sat [-h] [--limit SECONDS] [--incremental]
+ssp-sat [-h] [--limit SECONDS]
+        [--mode {standard,incremental,maxsat,maxsat-no-t}]
         [--enable-constraint NAME | --core-only]
         [--csv CSV | --no-csv] input
 ```
@@ -63,8 +69,8 @@ Các tham số:
 - `input`: một benchmark file hoặc một thư mục. Thư mục được quét đệ quy theo
   thứ tự đường dẫn ổn định;
 - `--limit SECONDS`: tổng time limit cho mỗi problem, mặc định `600` giây;
-- `--incremental`: bật chế độ Incremental SAT; nếu không có cờ này thì dùng
-  standard mode;
+- `--mode`: chọn `standard`, `incremental`, `maxsat` hoặc `maxsat-no-t`; mặc
+  định `standard`;
 - không truyền cờ chọn constraint: bật mặc định cả bốn additional constraints;
 - `--core-only`: chỉ dùng core encoding, tắt toàn bộ additional constraints;
 - `--enable-constraint NAME`: chỉ bật constraint có tên được chọn; có thể lặp
@@ -77,8 +83,9 @@ Ví dụ:
 
 ```bash
 uv run ssp-sat data/Catanzaro/datA1 --limit 120
-uv run ssp-sat data/Catanzaro/datA1 --incremental
-uv run ssp-sat data --incremental --csv benchmark.csv
+uv run ssp-sat data/Catanzaro/datA1 --mode incremental
+uv run ssp-sat data --mode maxsat --csv benchmark.csv
+uv run ssp-sat data --mode maxsat-no-t --csv benchmark-no-t.csv
 uv run ssp-sat data/dummy.txt --core-only
 uv run ssp-sat data/dummy.txt --enable-constraint symmetry \
   --enable-constraint adjacency
@@ -387,7 +394,7 @@ assumption:
 nghĩa là tổng `t` không vượt `k`. Nếu `k >= len(t_literals)`, cardinality là
 vacuous và không cần assumption.
 
-## 8. Hai chế độ tối ưu
+## 8. Bốn chế độ tối ưu
 
 ### Standard
 
@@ -410,8 +417,46 @@ Với mỗi problem:
 4. giữ lại toàn bộ clauses và learned state cho bound sau;
 5. đóng worker khi tìm thấy UNSAT, đạt LB, timeout, lỗi hoặc bị ngắt.
 
-Cả hai mode đều giảm `k` đúng một đơn vị, không binary search và không jump
-theo validated KTNS cost.
+### MaxSAT
+
+Mode này build hard CNF tại greedy upper bound để giữ adjacency pruning an
+toàn, nhưng không tạo constraint toàn cục `sum(t) <= k`. Mỗi insertion literal
+nhận một soft unit clause trọng số 1:
+
+```text
+1 -t[u,j] 0
+```
+
+WCNF được ghi vào temporary file rồi giải bởi
+`bin/EvalMaxSAT_bin --old`. Objective do binary trả về phải bằng số insertion
+literal dương trong model; model còn được kiểm tra lại bằng KTNS như SAT mode.
+
+### MaxSAT không có `t`
+
+Mode `maxsat-no-t` không cấp phát insertion variables và không thêm các clause
+định nghĩa `t`. Thay vào đó, mỗi transition `0 -> 1` từ position 2 trở đi được
+đo bởi soft clause trọng số 1:
+
+```math
+z_{u,j-1}\lor\neg z_{u,j},\qquad j=2,\ldots,N'.
+```
+
+Clause bị vi phạm chính xác khi tool `u` được insert tại position `j`. Exact
+capacity buộc position đầu chứa đúng `C` tools, nên objective SSP được report
+và validate là `objective_EvalMaxSAT + C`.
+
+Trong encoding này, `insertion-requirement` được viết trực tiếp thành:
+
+```math
+z_{u,j-1}\lor\neg z_{u,j}\lor
+\bigvee_{i:u\in R_i}x_{i,j}.
+```
+
+`required-transition` cũng được thay bằng clause tương đương sau khi khử `t`;
+symmetry và adjacency không đổi.
+
+Hai SAT mode giảm `k` đúng một đơn vị, không binary search và không jump theo
+validated KTNS cost. Cả hai MaxSAT mode giải trực tiếp một objective duy nhất.
 
 ## 9. Multiprocessing, timeout và ngắt chương trình
 
@@ -420,9 +465,16 @@ và SAT search. Trước mỗi solve, worker chỉ nhận phần thời gian cò
 
 - Standard mode dùng một child process cho mỗi SAT call.
 - Incremental mode dùng một persistent child process cho mỗi problem.
+- Mỗi MaxSAT mode dùng một EvalMaxSAT subprocess và temporary WCNF file.
 - Parent chờ kết quả qua pipe và theo dõi cả pipe lẫn process sentinel.
 - Khi hết hạn, parent gọi `terminate()`, chờ ngắn, rồi `kill()` nếu cần.
 - Không có silent fallback sang SAT solver khác.
+
+Với MaxSAT, parent tự quản lý deadline và không truyền `--TCT`, vì `TCT` của
+binary hiện tại là target cho strategy chứ không bảo đảm process dừng đúng
+wall-clock deadline. Parent gửi `SIGTERM`; signal handler của EvalMaxSAT sẽ
+in `s SATISFIABLE` cùng incumbent nếu đã có. Nếu trả `s UNKNOWN` hoặc không có
+model, nghiệm greedy/KTNS ban đầu vẫn là upper bound khả thi.
 
 Khi timeout:
 
@@ -449,14 +501,16 @@ Sau mỗi SAT result, validator không tin model một cách trực tiếp. Nó 
 3. `z[u,0]` đều false;
 4. mỗi magazine có đúng `c` tools;
 5. requirements của job là tập con magazine;
-6. mọi `t[u,j]` đúng với transition `0 -> 1` của `z`;
-7. tổng `t` không vượt bound `k`;
+6. nếu encoding có `t`, mọi `t[u,j]` đúng với transition `0 -> 1` của `z`;
+7. insertion cost tính từ các transition của `z` không vượt bound SAT hoặc
+   bằng objective MaxSAT đã hiệu chỉnh;
 8. reconstruction chứa đúng mọi original job;
 9. KTNS trên reconstructed full sequence có cost không vượt `k`.
 
-Optimality được chứng nhận bởi linear descending search: nếu có nghiệm khả thi
+SAT optimality được chứng nhận bởi linear descending search: nếu có nghiệm khả thi
 cost `b` và bound `b-1` là UNSAT thì `b` là optimum. Nếu đạt `LB` với SAT thì
-`LB` là optimum. Timeout không tạo chứng nhận tối ưu.
+`LB` là optimum. MaxSAT optimality yêu cầu `s OPTIMUM FOUND`, exit code `30`,
+model và objective hợp lệ. Timeout không tạo chứng nhận tối ưu.
 
 ## 11. Output và CSV
 
@@ -521,7 +575,11 @@ standard = optimize_instance(instances[0], time_limit=600)
 incremental = optimize_instance(
     instances[0],
     time_limit=600,
-    incremental=True,
+    mode="incremental",
+)
+maxsat = optimize_instance(instances[0], time_limit=600, mode="maxsat")
+maxsat_no_t = optimize_instance(
+    instances[0], time_limit=600, mode="maxsat-no-t"
 )
 core_only = optimize_instance(
     instances[0],
@@ -542,7 +600,10 @@ Các API thấp hơn:
 - `ktns(sequence, requirements, m, c)`;
 - `build_cnf(..., additional_constraints=...)`;
 - `build_incremental_cnf(..., additional_constraints=...)`;
+- `build_maxsat_wcnf(..., additional_constraints=...)`;
+- `build_maxsat_no_t_wcnf(..., additional_constraints=...)`;
 - `solve_cnf(build, time_limit)`;
+- `solve_maxsat(build, time_limit)`;
 - `IncrementalSolverSession`;
 - `validate_sat_solution(...)`.
 
@@ -557,10 +618,10 @@ src/
   distances.py    pairwise distance
   ktns.py         KTNS evaluator
   upper_bound.py  all-start greedy upper bound
-  encoding.py     standard CNF, ITotalizer và adjacency clauses
-  solver.py       CaDiCaL multiprocessing workers
+  encoding.py     standard/incremental CNF, WCNF và adjacency clauses
+  solver.py       CaDiCaL workers và EvalMaxSAT subprocess
   validate.py     decode và independent validation
-  optimize.py     standard/incremental descending search
+  optimize.py     standard, incremental và MaxSAT orchestration
   report.py       console và atomic CSV output
 ```
 
@@ -588,17 +649,19 @@ Test suite bao phủ:
 - strengthening insert-tool từ position 2 và initial filler exception;
 - adjacency pruning và tính đơn điệu của adjacency delta;
 - `ITotalizer` so với standard cardinality trên nhiều bound;
-- standard/incremental optimum so với exhaustive job permutations;
+- optimum của cả bốn mode so với exhaustive job permutations;
+- encoding `maxsat-no-t`, soft transition clauses và objective offset `+C`;
+- WCNF soft clauses, EvalMaxSAT output parsing và SIGTERM incumbent;
 - timeout, worker reuse, process cleanup và `KeyboardInterrupt`;
-- `restarts`, `conflicts`, `decisions`, `propagations` cho cả hai solver mode;
+- `restarts`, `conflicts`, `decisions`, `propagations` cho SAT modes;
 - CLI, mode trong CSV, timestamped filenames và partial CSV.
 
 Trạng thái xác minh tại thời điểm viết tài liệu:
 
-- 39 unit/integration tests thành công;
+- 52 unit/integration tests thành công;
 - parser đọc 168 file / 1.671 instances;
-- 60 random small instances sau khi thêm symmetry-breaking cho kết quả
-  `standard == incremental == exhaustive`;
+- random small instances cho kết quả
+  `standard == incremental == maxsat == maxsat-no-t == exhaustive`;
 - `dummy.txt` trả optimum `11` ở incremental mode;
 - `datA1/problem-2` dùng cùng một incremental worker cho các bound `12`, `11`,
   `10` và trả optimum `11`.
@@ -606,9 +669,9 @@ Trạng thái xác minh tại thời điểm viết tài liệu:
 ## 15. Các bảo đảm và giới hạn hiện tại
 
 - Kết quả deterministic với cùng input, phiên bản dependency và solver.
-- Chỉ `cadical300` được dùng; thiếu backend sẽ tạo configuration error rõ ràng.
-- Không dùng best-known value, MaxSAT, binary search, randomization hay local
-  search.
+- SAT modes dùng `cadical300`; hai MaxSAT mode dùng binary EvalMaxSAT tại
+  `bin/`. Thiếu backend hoặc binary sẽ tạo configuration error rõ ràng.
+- Không dùng best-known value, binary search hay randomization.
 - Không chạy các instance song song; multiprocessing chỉ cô lập SAT solver để
   quản lý timeout và interruption.
 - Time limit có thể bị vượt nhẹ bởi chi phí IPC/process termination, nhưng

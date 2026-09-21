@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 ADDITIONAL_CONSTRAINT_NAMES = (
@@ -10,6 +10,14 @@ ADDITIONAL_CONSTRAINT_NAMES = (
     "insertion-requirement",
     "adjacency",
     "required-transition",
+)
+
+OptimizationMode = Literal["standard", "incremental", "maxsat", "maxsat-no-t"]
+OPTIMIZATION_MODES: tuple[OptimizationMode, ...] = (
+    "standard",
+    "incremental",
+    "maxsat",
+    "maxsat-no-t",
 )
 
 
@@ -104,12 +112,19 @@ class CNFBuildResult:
     t_literal_count: int = 0
 
 
+@dataclass(slots=True)
+class MaxSATBuildResult:
+    core: CNFBuildResult
+    wcnf: Any
+
+
 @dataclass(frozen=True, slots=True)
 class SolverResult:
     status: str
     solve_time: float
     model: tuple[int, ...] | None
     stats: dict[str, int | float | None]
+    objective: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +138,7 @@ class ValidationResult:
 
 @dataclass(frozen=True, slots=True)
 class IterationResult:
-    k: int
+    k: int | None
     status: str
     primary_variables: int
     auxiliary_variables: int
@@ -131,6 +146,7 @@ class IterationResult:
     clauses: int
     solve_time: float
     stats: dict[str, int | float | None] = field(default_factory=dict)
+    objective: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

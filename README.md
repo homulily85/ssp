@@ -4,8 +4,8 @@ Tài liệu kỹ thuật đầy đủ: [docs/implementation.md](docs/implementat
 
 Exact solver for the Job Sequencing and Tool Switching Problem described in
 `plan.md`. It uses dominance preprocessing, an all-start greedy upper bound,
-KTNS evaluation, a SAT encoding, and a strict descending search with PySAT's
-CaDiCaL 3.0 backend.
+KTNS evaluation, and either SAT optimization with PySAT's CaDiCaL 3.0 backend
+or MaxSAT optimization with the local EvalMaxSAT binary.
 
 The encoding is split into a mandatory core and four optional constraint
 groups: `symmetry`, `insertion-requirement`, `adjacency`, and
@@ -53,23 +53,37 @@ problem. Set a different limit with `--limit SECONDS`, for example:
 uv run ssp-sat data/Catanzaro/datA1 --limit 120
 ```
 
-Add `--incremental` to build the global insertion cardinality with PySAT's
-`ITotalizer` and reuse one CaDiCaL process, its clauses, and learned state for
-all descending bounds of a problem:
+Select the optimization implementation with `--mode`. Standard mode rebuilds
+the global sequential counter for every bound; incremental mode uses PySAT's
+`ITotalizer` and reuses one CaDiCaL process:
 
 ```bash
-uv run ssp-sat data/Catanzaro/datA1 --incremental
+uv run ssp-sat data/Catanzaro/datA1 --mode standard
+uv run ssp-sat data/Catanzaro/datA1 --mode incremental
 ```
 
-Without this flag, the standard mode rebuilds the global sequential counter
-and starts a fresh solver for every bound. Both modes keep the same strict
-descending search and independent KTNS validation.
+Two MaxSAT modes build one WCNF without the global insertion bound. The
+original encoding minimizes weight-1 soft clauses `not t[u,j]`; the no-`t`
+encoding minimizes transitions directly from consecutive `z` variables:
 
-On timeout the worker process is terminated and the output is marked `TIMEOUT`;
-the reported cost is only the best feasible upper bound, not a certified
-optimum. No PySAT time-limit API is used.
+```bash
+uv run ssp-sat data/Catanzaro/datA1 --mode maxsat
+uv run ssp-sat data/Catanzaro/datA1 --mode maxsat-no-t
+```
 
-If the run is stopped with `Ctrl+C`, the active CaDiCaL worker is terminated and
+For `maxsat-no-t`, each soft clause is
+`z[u,j-1] or not z[u,j]` for `j=2,...,N`. The reported objective adds the
+fixed initial magazine cost `C` to EvalMaxSAT's raw objective.
+
+It requires the executable `bin/EvalMaxSAT_bin`. EvalMaxSAT models and
+objectives are independently checked against the encoding and KTNS.
+
+On timeout the output is marked `TIMEOUT`; the reported cost is only the best
+feasible upper bound, not a certified optimum. SAT workers are terminated.
+In MaxSAT mode the parent sends `SIGTERM`, allowing EvalMaxSAT to print its
+current incumbent; if none exists yet, the greedy/KTNS solution is retained.
+
+If the run is stopped with `Ctrl+C`, the active solver process is terminated and
 the CSV is written as `ssp_result_YYYY-MM-DD-HH-MM-SS_interupt.csv`, containing
 only instances completed before the interrupt. The command then exits with
 status 130. With `--no-csv`, no partial file is created. A custom `--csv` path is
@@ -83,7 +97,8 @@ Per-iteration console output and per-problem CSV output include CaDiCaL
 `restarts`, `conflicts`, `decisions`, and `propagations` statistics. If a
 CaDiCaL process is killed on timeout or interruption before returning its
 statistics, these fields are reported as `N/A`, not as zero. The CSV also has
-one Boolean column for each optional constraint.
+one Boolean column for each optional constraint. EvalMaxSAT does not expose
+these statistics in its output, so MaxSAT rows report them as `N/A`.
 
 ## Test
 

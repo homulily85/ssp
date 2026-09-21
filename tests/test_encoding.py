@@ -6,7 +6,13 @@ from pysat.solvers import Solver
 
 from src.distances import pairwise_distances
 from src.dominance import preprocess_dominance
-from src.encoding import adjacency_clauses, build_cnf, build_incremental_cnf
+from src.encoding import (
+    adjacency_clauses,
+    build_cnf,
+    build_incremental_cnf,
+    build_maxsat_no_t_wcnf,
+    build_maxsat_wcnf,
+)
 from src.model import AdditionalConstraints, ReducedInstance
 from src.solver import solve_cnf
 
@@ -209,6 +215,96 @@ class EncodingTests(unittest.TestCase):
                     standard_solver.solve(),
                     f"different satisfiability at k={k}",
                 )
+
+    def test_maxsat_uses_unit_soft_clauses_without_global_cardinality(self):
+        dominance = preprocess_dominance(
+            make_instance([{0, 1}, {1, 2}, {2, 3}], 4, 2)
+        )
+        reduced = dominance.reduced
+        build = build_maxsat_wcnf(
+            reduced,
+            6,
+            pairwise_distances(reduced),
+        )
+        expected_soft = [
+            [-build.core.vars_t[tool, position]]
+            for position in range(1, reduced.n + 1)
+            for tool in range(reduced.m)
+        ]
+        self.assertEqual(build.wcnf.soft, expected_soft)
+        self.assertEqual(build.wcnf.wght, [1] * len(expected_soft))
+        self.assertEqual(build.wcnf.hard, build.core.cnf.clauses)
+        self.assertEqual(
+            build.core.variable_counts["cardinality_auxiliary"], 0
+        )
+
+    def test_maxsat_no_t_uses_z_transition_soft_clauses(self):
+        dominance = preprocess_dominance(
+            make_instance([{0, 1}, {1, 2}, {2, 3}], 4, 2)
+        )
+        reduced = dominance.reduced
+        build = build_maxsat_no_t_wcnf(
+            reduced,
+            6,
+            pairwise_distances(reduced),
+        )
+        with_t = build_maxsat_wcnf(
+            reduced,
+            6,
+            pairwise_distances(reduced),
+        )
+        expected_soft = [
+            [
+                build.core.vars_z[tool, position - 1],
+                -build.core.vars_z[tool, position],
+            ]
+            for position in range(2, reduced.n + 1)
+            for tool in range(reduced.m)
+        ]
+        self.assertFalse(build.core.vars_t)
+        self.assertEqual(build.core.t_literal_count, 0)
+        self.assertEqual(build.wcnf.soft, expected_soft)
+        self.assertEqual(build.wcnf.wght, [1] * len(expected_soft))
+        self.assertEqual(build.wcnf.hard, build.core.cnf.clauses)
+        self.assertEqual(build.core.variable_counts["cardinality_auxiliary"], 0)
+        self.assertEqual(
+            build.core.variable_counts["primary"],
+            with_t.core.variable_counts["primary"] - reduced.m * reduced.n,
+        )
+
+    def test_maxsat_no_t_rewrites_insertion_requirement(self):
+        reduced = ReducedInstance(
+            "maxsat-no-t-constraints",
+            3,
+            2,
+            (frozenset({0}), frozenset({1})),
+            (0, 1),
+        )
+        build = build_maxsat_no_t_wcnf(
+            reduced,
+            4,
+            pairwise_distances(reduced),
+        )
+        self.assertIn(
+            [build.core.vars_z[2, 1], -build.core.vars_z[2, 2]],
+            build.wcnf.hard,
+        )
+        self.assertIn(
+            [
+                build.core.vars_z[0, 1],
+                -build.core.vars_z[0, 2],
+                build.core.vars_x[0, 2],
+            ],
+            build.wcnf.hard,
+        )
+        self.assertIn(
+            [
+                -build.core.vars_x[0, 2],
+                build.core.vars_z[0, 1],
+                build.core.vars_z[0, 2],
+            ],
+            build.wcnf.hard,
+        )
 
     def test_adjacency_clause_sets_grow_as_bound_decreases(self):
         reduced, build = self._build([{0, 1}, {2, 3}, {0, 2}], 4, 2, 6)

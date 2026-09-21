@@ -59,13 +59,15 @@ def validate_sat_solution(
         if not required <= magazine:
             raise AssertionError(f"SAT magazine at position {position} misses required tools")
         for tool in range(m):
-            actual_t = build.vars_t[tool, position] in positive
             expected_t = tool in magazine and tool not in previous
-            if actual_t != expected_t:
-                raise AssertionError(
-                    f"incorrect t[{tool},{position}] in SAT model: {actual_t} != {expected_t}"
-                )
-            sat_cost += int(actual_t)
+            if build.vars_t:
+                actual_t = build.vars_t[tool, position] in positive
+                if actual_t != expected_t:
+                    raise AssertionError(
+                        f"incorrect t[{tool},{position}] in SAT model: "
+                        f"{actual_t} != {expected_t}"
+                    )
+            sat_cost += int(expected_t)
         previous = magazine
     if sat_cost > k:
         raise AssertionError(f"SAT cost {sat_cost} exceeds bound {k}")

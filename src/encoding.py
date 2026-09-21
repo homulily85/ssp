@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from pysat.card import CardEnc, EncType, ITotalizer
-from pysat.formula import CNF, IDPool
+from pysat.formula import CNF, IDPool, WCNF
 
-from .model import AdditionalConstraints, CNFBuildResult, ReducedInstance
+from .model import (
+    AdditionalConstraints,
+    CNFBuildResult,
+    MaxSATBuildResult,
+    ReducedInstance,
+)
 
 
 def build_cnf(
@@ -14,6 +19,7 @@ def build_cnf(
     additional_constraints: AdditionalConstraints | None = None,
     defer_adjacency: bool = False,
     include_global_cardinality: bool = True,
+    include_transition_variables: bool = True,
 ) -> CNFBuildResult:
     cnf = CNF()
     vpool = IDPool()
@@ -45,8 +51,9 @@ def build_cnf(
     for u in range(m):
         for j in range(0, n + 1):
             vars_z[u, j] = vpool.id(("z", u, j))
-        for j in range(1, n + 1):
-            vars_t[u, j] = vpool.id(("t", u, j))
+        if include_transition_variables:
+            for j in range(1, n + 1):
+                vars_t[u, j] = vpool.id(("t", u, j))
     for j in range(1, n + 1):
         for q in range(0, m + 1):
             for r in range(0, c + 2):
@@ -114,11 +121,12 @@ def build_cnf(
     for u in range(m):
         cnf.append([-vars_z[u, 0]])
 
-    # 8. t <-> (z_j and not z_{j-1}).
-    for j in range(1, n + 1):
-        for u in range(m):
-            t, z, previous = vars_t[u, j], vars_z[u, j], vars_z[u, j - 1]
-            cnf.extend([[-t, z], [-t, -previous], [-z, previous, t]])
+    # 8. t <-> (z_j and not z_{j-1}) when transition variables are enabled.
+    if include_transition_variables:
+        for j in range(1, n + 1):
+            for u in range(m):
+                t, z, previous = vars_t[u, j], vars_z[u, j], vars_z[u, j - 1]
+                cnf.extend([[-t, z], [-t, -previous], [-z, previous, t]])
 
     append_additional_constraints(
         cnf=cnf,
@@ -134,7 +142,11 @@ def build_cnf(
     )
 
     # 9. Global sequential counter over insertion literals.
-    t_literals = [vars_t[u, j] for j in range(1, n + 1) for u in range(m)]
+    t_literals = (
+        [vars_t[u, j] for j in range(1, n + 1) for u in range(m)]
+        if include_transition_variables
+        else []
+    )
     before_cardinality = vpool.top
     if include_global_cardinality and k < len(t_literals):
         card = CardEnc.atmost(lits=t_literals, bound=k, vpool=vpool, encoding=EncType.seqcounter)
@@ -214,9 +226,14 @@ def append_additional_constraints(
         for i, required in enumerate(instance.requirements):
             for j in range(1, n + 1):
                 for u in sorted(required):
-                    cnf.append(
-                        [-vars_x[i, j], vars_z[u, j - 1], vars_t[u, j]]
-                    )
+                    if vars_t:
+                        cnf.append(
+                            [-vars_x[i, j], vars_z[u, j - 1], vars_t[u, j]]
+                        )
+                    else:
+                        cnf.append(
+                            [-vars_x[i, j], vars_z[u, j - 1], vars_z[u, j]]
+                        )
 
     if enabled.insertion_requirement:
         jobs_requiring_tool = [
@@ -225,10 +242,15 @@ def append_additional_constraints(
         ]
         for j in range(2, n + 1):
             for u in range(m):
-                cnf.append(
-                    [-vars_t[u, j]]
-                    + [vars_x[i, j] for i in jobs_requiring_tool[u]]
-                )
+                required_jobs = [
+                    vars_x[i, j] for i in jobs_requiring_tool[u]
+                ]
+                if vars_t:
+                    cnf.append([-vars_t[u, j]] + required_jobs)
+                else:
+                    cnf.append(
+                        [vars_z[u, j - 1], -vars_z[u, j]] + required_jobs
+                    )
 
     if enabled.adjacency and include_adjacency:
         cnf.extend(adjacency_clauses(instance, d_matrix, k, vars_x))
@@ -281,3 +303,55 @@ def build_incremental_cnf(
     finally:
         totalizer.delete()
     return build
+
+
+def build_maxsat_wcnf(
+    instance: ReducedInstance,
+    upper_bound: int,
+    d_matrix: tuple[tuple[int, ...], ...],
+    *,
+    additional_constraints: AdditionalConstraints | None = None,
+) -> MaxSATBuildResult:
+    """Build hard SSP clauses and unit soft clauses minimizing insertions."""
+    core = build_cnf(
+        instance,
+        upper_bound,
+        d_matrix,
+        additional_constraints=additional_constraints,
+        include_global_cardinality=False,
+    )
+    wcnf = WCNF()
+    for clause in core.cnf.clauses:
+        wcnf.append(clause)
+    for position in range(1, instance.n + 1):
+        for tool in range(instance.m):
+            wcnf.append([-core.vars_t[tool, position]], weight=1)
+    return MaxSATBuildResult(core=core, wcnf=wcnf)
+
+
+def build_maxsat_no_t_wcnf(
+    instance: ReducedInstance,
+    upper_bound: int,
+    d_matrix: tuple[tuple[int, ...], ...],
+    *,
+    additional_constraints: AdditionalConstraints | None = None,
+) -> MaxSATBuildResult:
+    """Build a WCNF that counts insertions directly from z transitions."""
+    core = build_cnf(
+        instance,
+        upper_bound,
+        d_matrix,
+        additional_constraints=additional_constraints,
+        include_global_cardinality=False,
+        include_transition_variables=False,
+    )
+    wcnf = WCNF()
+    for clause in core.cnf.clauses:
+        wcnf.append(clause)
+    for position in range(2, instance.n + 1):
+        for tool in range(instance.m):
+            wcnf.append(
+                [core.vars_z[tool, position - 1], -core.vars_z[tool, position]],
+                weight=1,
+            )
+    return MaxSATBuildResult(core=core, wcnf=wcnf)

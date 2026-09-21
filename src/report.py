@@ -61,8 +61,13 @@ def print_result(result: OptimizationResult, stream: TextIO) -> None:
         solver_stats = " ".join(
             f"{key}={_iteration_stat(item, key)}" for key in _SOLVER_STATS
         )
+        attempt = (
+            f"MaxSAT solve: objective={item.objective if item.objective is not None else 'N/A'}"
+            if item.k is None
+            else f"SAT iteration: k={item.k}"
+        )
         print(
-            f"SAT iteration: k={item.k} {item.status} primary_variables={item.primary_variables} "
+            f"{attempt} {item.status} primary_variables={item.primary_variables} "
             f"auxiliary_variables={item.auxiliary_variables} total_variables={item.variables} "
             f"clauses={item.clauses} solve_time={item.solve_time:.6f}s {solver_stats}",
             file=stream,

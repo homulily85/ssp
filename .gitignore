@@ -219,3 +219,5 @@ __marimo__/
 
 # Solver result files
 ssp_result_*.csv
+
+bin/
