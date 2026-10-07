@@ -20,8 +20,9 @@ that the final incumbent can be executed at no greater cost.
 `direct-sat` uses job-position assignment variables and restricts the first
 greedy job to the first half of positions to break reversal symmetry.
 `tsp-sat-cegar` uses adjacency variables, an empty dummy vertex and lazy
-subtour elimination. Both use sequential counters for assignment and capacity,
-and one reusable `ITotalizer` for insertion bounds through solver assumptions.
+subtour elimination. Both use sequential counters for assignment and capacity. TSP-SAT uses one
+reusable `ITotalizer` for insertion bounds; direct adds a fresh sequential
+counter for each tested bound, so those objective clauses accumulate.
 
 ## Run
 

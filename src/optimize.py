@@ -3,7 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from .dominance import preprocess_dominance
-from .encoding import build_direct_cnf, build_tsp_cnf
+from .encoding import build_direct_cnf, build_tsp_cnf, encode_direct_bound
 from .ktns import ktns
 from .model import ALGORITHM, ALGORITHMS, IterationResult, OptimizationResult, SSPInstance, TSPBuildResult
 from .solver import IncrementalSolverSession, unavailable_solver_stats
@@ -61,7 +61,7 @@ def _iteration(
         primary_variables=build.variable_counts["primary"],
         auxiliary_variables=build.variable_counts["auxiliary"],
         variables=build.variable_counts["total"],
-        clauses=build.base_clause_count + total_subtour_cuts,
+        clauses=build.base_clause_count + build.variable_counts.get("bound_clauses", 0) + total_subtour_cuts,
         solve_time=solve_time,
         subtours_found=subtours_found,
         subtour_cuts_added=subtour_cuts_added,
@@ -145,9 +145,15 @@ def optimize_instance(
                             status = "TIMEOUT"
                             break
 
+                        if algorithm == "direct-sat":
+                            bound_clauses = encode_direct_bound(build, k)
+                            assumptions = []
+                        else:
+                            bound_clauses = []
+                            assumptions = _bound_assumptions(build, k)
                         solved = session.solve(
-                            new_clauses=pending_clauses,
-                            assumptions=_bound_assumptions(build, k),
+                            new_clauses=pending_clauses + bound_clauses,
+                            assumptions=assumptions,
                             time_limit=remaining,
                         )
                         pending_clauses = []

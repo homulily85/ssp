@@ -11,7 +11,7 @@ from pysat.solvers import Solver
 
 from src.cli import build_argument_parser, main
 from src.dominance import preprocess_dominance
-from src.encoding import build_direct_cnf
+from src.encoding import build_direct_cnf, encode_direct_bound
 from src.optimize import optimize_instance
 from src.upper_bound import construct_upper_bound
 from src.validate import validate_direct_solution
@@ -47,15 +47,22 @@ class DirectTests(unittest.TestCase):
         original = make_instance([{0}, {1}, {2}], 3, 1)
         dominance = preprocess_dominance(original)
         build = build_direct_cnf(dominance.reduced, 3, 0)
+        self.assertEqual(build.totalizer_rhs, ())
+        self.assertEqual(build.variable_counts["itotalizer_auxiliary"], 0)
+        bound_2 = encode_direct_bound(build, 2)
+        bound_3 = encode_direct_bound(build, 3)
         with Solver(name="cadical300", bootstrap_with=build.cnf.clauses) as solver:
             self.assertFalse(solver.solve(assumptions=[build.vars_x[0, 2]]))
             self.assertFalse(solver.solve(assumptions=[build.vars_x[0, 0], build.vars_x[0, 1]]))
             self.assertFalse(solver.solve(assumptions=[build.vars_x[0, 0], -build.vars_z[0, 0]]))
             self.assertFalse(solver.solve(assumptions=[build.vars_z[0, 0], build.vars_z[1, 0]]))
-            self.assertFalse(solver.solve(assumptions=[-build.totalizer_rhs[2]]))
             sequence = [build.vars_x[job, job] for job in range(3)]
-            self.assertTrue(solver.solve(assumptions=sequence + [-build.totalizer_rhs[3]]))
+            self.assertTrue(solver.solve(assumptions=sequence))
             model = solver.get_model()
+        with Solver(name="cadical300", bootstrap_with=build.cnf.clauses + bound_2) as solver:
+            self.assertFalse(solver.solve(assumptions=sequence))
+        with Solver(name="cadical300", bootstrap_with=build.cnf.clauses + bound_3) as solver:
+            self.assertTrue(solver.solve(assumptions=sequence))
         validated = validate_direct_solution(original, dominance, build, model, 3)
         self.assertEqual(validated.sat_cost, 3)
         for tool in range(3):

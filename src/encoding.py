@@ -192,26 +192,39 @@ def build_direct_cnf(
                 cnf.extend([[-inserted, -previous], [inserted, -current, previous]])
     sequential = vpool.top - primary
     literals = list(t.values())
-    rhs = ()
-    before = vpool.top
-    if literals:
-        with ITotalizer(
-            lits=literals, ubound=min(max_bound, len(literals) - 1),
-            top_id=vpool.top,
-        ) as totalizer:
-            cnf.extend(totalizer.cnf.clauses)
-            rhs = tuple(totalizer.rhs)
-            vpool.top = totalizer.top_id
-    totalizer_aux = vpool.top - before
+    rhs: tuple[int, ...] = ()
+    totalizer_aux = 0
     return DirectBuildResult(
         cnf=cnf, vpool=vpool, vars_x=x, vars_z=z, vars_t=t,
         variable_counts={
             "primary": primary,
             "sequential_counter_auxiliary": sequential,
-            "itotalizer_auxiliary": totalizer_aux,
-            "auxiliary": sequential + totalizer_aux,
+            "itotalizer_auxiliary": 0,
+            "auxiliary": sequential,
+            "bound_clauses": 0,
             "total": vpool.top, "clauses": len(cnf.clauses),
         },
         totalizer_rhs=rhs, t_literal_count=len(literals),
         base_clause_count=len(cnf.clauses), anchor_job=anchor_job,
     )
+
+
+def encode_direct_bound(build: DirectBuildResult, bound: int) -> list[list[int]]:
+    """Create a fresh sequential-counter objective bound for a direct solve."""
+    if bound < 0:
+        raise ValueError("decision bound must be non-negative")
+    if bound >= build.t_literal_count:
+        return []
+    before = build.vpool.top
+    clauses = CardEnc.atmost(
+        lits=list(build.vars_t.values()),
+        bound=bound,
+        vpool=build.vpool,
+        encoding=EncType.seqcounter,
+    ).clauses
+    auxiliary = build.vpool.top - before
+    build.variable_counts["sequential_counter_auxiliary"] += auxiliary
+    build.variable_counts["auxiliary"] += auxiliary
+    build.variable_counts["total"] = build.vpool.top
+    build.variable_counts["bound_clauses"] += len(clauses)
+    return clauses
