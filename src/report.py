@@ -51,7 +51,7 @@ def print_result(result: OptimizationResult, stream: TextIO) -> None:
     )
     print(f"Dominance mapping: {mapping or '(none)'}", file=stream)
     print(f"Lower bound: {result.lower_bound}", file=stream)
-    print(f"Greedy/KTNS upper bound: {result.initial_upper_bound}", file=stream)
+    print(f"Frequency greedy upper bound: {result.initial_upper_bound}", file=stream)
     print(f"Initial greedy sequence: {list(result.initial_sequence)}", file=stream)
     for item in result.iterations:
         solver_stats = " ".join(

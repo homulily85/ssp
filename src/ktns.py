@@ -36,18 +36,10 @@ def ktns(
         raise ValueError("a job requires more tools than magazine capacity")
 
     next_use = _next_use_table(sequence, requirements, m)
-    first_required = set(requirements[sequence[0]])
-    fillers = sorted(
-        (tool for tool in range(m) if tool not in first_required),
-        key=lambda tool: (next_use[0][tool], tool),
-    )
-    magazine = first_required | set(fillers[: c - len(first_required)])
-    cost = c
-    configs: list[frozenset[int]] = [frozenset(magazine)]
-    assert len(magazine) == c
-    assert first_required <= magazine
-
-    for position in range(1, len(sequence)):
+    magazine: set[int] = set()
+    cost = 0
+    configs: list[frozenset[int]] = []
+    for position in range(len(sequence)):
         required = set(requirements[sequence[position]])
         missing = required - magazine
         candidates = magazine - required
@@ -57,13 +49,11 @@ def ktns(
             candidates,
             key=lambda tool: (next_use[position][tool], tool),
             reverse=True,
-        )[: len(missing)]
-        if len(evicted) != len(missing):
-            raise AssertionError("insufficient evictable tools")
+        )[: max(0, len(magazine) + len(missing) - c)]
         magazine.difference_update(evicted)
         magazine.update(missing)
         cost += len(missing)
-        assert len(magazine) == c
+        assert len(magazine) <= c
         assert required <= magazine
         configs.append(frozenset(magazine))
     return cost, tuple(configs)

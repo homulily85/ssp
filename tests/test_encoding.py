@@ -6,9 +6,13 @@ from unittest.mock import patch
 from pysat.card import CardEnc, EncType
 from pysat.solvers import Solver
 
+from src.dominance import preprocess_dominance
 from src.encoding import build_tsp_cnf
 from src.model import ReducedInstance
 from src.subtour import decode_successor, find_cycles, subtour_cut
+from src.validate import validate_tsp_solution
+
+from tests.helpers import make_instance
 
 
 class TSPEncodingTests(unittest.TestCase):
@@ -41,13 +45,43 @@ class TSPEncodingTests(unittest.TestCase):
             len(build.vars_x) + len(build.vars_z) + len(build.vars_t),
         )
 
+    def test_unused_tools_do_not_receive_encoding_variables(self):
+        instance = make_instance([{1, 4}, {1, 2}, {2, 4}], 6, 2)
+        reduced = preprocess_dominance(instance).reduced
+        build = build_tsp_cnf(reduced, max_bound=8)
+
+        self.assertEqual(reduced.m, 3)
+        self.assertEqual(
+            {tool for tool, _ in build.vars_z}, set(range(reduced.m))
+        )
+        self.assertEqual(
+            {tool for tool, _ in build.vars_t}, set(range(reduced.m))
+        )
+        self.assertEqual(len(build.vars_z), reduced.n * 3)
+        self.assertEqual(len(build.vars_t), reduced.n * 3)
+
+    def test_unused_tools_have_no_initial_cost(self):
+        instance = make_instance([{2}, {2}], 5, 3)
+        dominance = preprocess_dominance(instance)
+        build = build_tsp_cnf(dominance.reduced, max_bound=3)
+        cycle = [build.vars_x[0, 1], build.vars_x[1, 0]]
+        with Solver(name="cadical300", bootstrap_with=build.cnf.clauses) as solver:
+            self.assertTrue(solver.solve(assumptions=cycle))
+            model = solver.get_model()
+
+        validated = validate_tsp_solution(instance, dominance, build, model, k=3)
+        self.assertEqual(validated.sat_cost, 1)
+        self.assertEqual(validated.ktns_cost, 1)
+        self.assertEqual(validated.magazine_configs, (frozenset({2}),))
+        self.assertEqual(validated.inserted_tools, (frozenset({2}),))
+
     def test_all_non_objective_cardinalities_use_sequential_counters(self):
         _, _ = self._build([{0}, {1}], 2, 1)
         original = CardEnc.equals
         with patch("src.encoding.CardEnc.equals", wraps=original) as equals:
             self._build([{0}, {1}], 2, 1)
         # 2 degree equalities for every vertex and one capacity equality/job.
-        self.assertEqual(equals.call_count, 2 * 3 + 2)
+        self.assertEqual(equals.call_count, 2 * 3)
         self.assertTrue(
             all(call.kwargs["encoding"] == EncType.seqcounter for call in equals.call_args_list)
         )

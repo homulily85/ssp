@@ -14,7 +14,7 @@ class KTNSTests(unittest.TestCase):
         for sequence in permutations(range(instance.n)):
             cost, configs = ktns(sequence, instance.requirements, instance.m, instance.c)
             self.assertEqual(cost, brute_force_magazine_cost(instance, sequence))
-            self.assertTrue(all(len(config) == instance.c for config in configs))
+            self.assertTrue(all(len(config) <= instance.c for config in configs))
 
     def test_full_capacity_costs_exactly_capacity(self):
         instance = make_instance([{0}, {1}, {2}], 3, 3)

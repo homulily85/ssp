@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .optimize import optimize_instance
+from .model import ALGORITHMS
 from .parser import SSPParseError, discover_input_files, parse_file
 from .report import print_result, write_csv
 from .solver import SolverConfigurationError
@@ -13,9 +14,16 @@ from .solver import SolverConfigurationError
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Exact TSP-SAT + CEGAR solver for SSP instances"
+        description="Exact direct-SAT or TSP-SAT + CEGAR solver for SSP instances"
     )
     parser.add_argument("input", type=Path, help="input benchmark file or directory")
+    parser.add_argument(
+        "--problem",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="solve only problem ID from a single input file",
+    )
     parser.add_argument(
         "--limit",
         type=float,
@@ -23,6 +31,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="time limit for each problem (default: 600 seconds)",
     )
+    parser.add_argument("--algorithm", required=True, choices=ALGORITHMS)
     output = parser.add_mutually_exclusive_group()
     output.add_argument(
         "--csv",
@@ -54,6 +63,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.limit <= 0:
             raise ValueError("--limit must be greater than zero")
+        if args.problem is not None and args.problem <= 0:
+            raise ValueError("--problem must be greater than zero")
+        if args.problem is not None and args.input.is_dir():
+            raise ValueError("--problem can only be used with a single input file")
         files = discover_input_files(args.input)
         if not files:
             raise SSPParseError(f"no SSP benchmark files found under {args.input}")
@@ -68,8 +81,16 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError:
                 display = str(path)
             instances.extend(parse_file(path, name_prefix=display))
+        if args.problem is not None:
+            instances = [
+                instance for instance in instances if instance.problem_id == args.problem
+            ]
+            if not instances:
+                raise ValueError(
+                    f"{args.input}: problem {args.problem} was not found"
+                )
         for instance in instances:
-            result = optimize_instance(instance, time_limit=args.limit)
+            result = optimize_instance(instance, time_limit=args.limit, algorithm=args.algorithm)
             results.append(result)
             print_result(result, sys.stdout)
         if not args.no_csv:

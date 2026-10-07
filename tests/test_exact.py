@@ -16,7 +16,7 @@ class ExactEndToEndTests(unittest.TestCase):
         instance = make_instance(
             [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "stats"
         )
-        result = optimize_instance(instance)
+        result = optimize_instance(instance, algorithm="tsp-sat-cegar")
         self.assertEqual(result.algorithm, ALGORITHM)
         for iteration in result.iterations:
             for key in ("restarts", "conflicts", "decisions", "propagations"):
@@ -39,12 +39,23 @@ class ExactEndToEndTests(unittest.TestCase):
         for instance, expected_cost in cases:
             with self.subTest(instance=instance.name):
                 expected, _ = brute_force_optimum(instance)
-                result = optimize_instance(instance)
+                result = optimize_instance(instance, algorithm="tsp-sat-cegar")
                 self.assertEqual(result.status, "OPTIMAL")
                 self.assertEqual(result.optimum, expected)
                 if expected_cost is not None:
                     self.assertEqual(result.optimum, expected_cost)
                 self.assertEqual(result.verification_cost, expected)
+
+    def test_compacted_tools_preserve_the_original_optimum(self):
+        instance = make_instance([{1, 4}, {1, 2}, {2, 4}], 6, 2, "tool-pruning")
+        expected, _ = brute_force_optimum(instance)
+
+        result = optimize_instance(instance, algorithm="tsp-sat-cegar")
+
+        self.assertEqual(result.dominance.reduced.m, 3)
+        self.assertEqual(result.status, "OPTIMAL")
+        self.assertEqual(result.optimum, expected)
+        self.assertEqual(result.verification_cost, expected)
 
     def test_seeded_random_instances_match_exhaustive_search(self):
         randomizer = random.Random(20260921)
@@ -59,7 +70,7 @@ class ExactEndToEndTests(unittest.TestCase):
             instance = make_instance(requirements, m, c, f"random-{case}")
             with self.subTest(instance=instance.name):
                 expected, _ = brute_force_optimum(instance)
-                result = optimize_instance(instance)
+                result = optimize_instance(instance, algorithm="tsp-sat-cegar")
                 self.assertEqual(result.optimum, expected)
                 self.assertEqual(result.verification_cost, expected)
 
@@ -67,7 +78,7 @@ class ExactEndToEndTests(unittest.TestCase):
         instance = make_instance(
             [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "bound-jump"
         )
-        result = optimize_instance(instance)
+        result = optimize_instance(instance, algorithm="tsp-sat-cegar")
         sat_witnesses = [
             item
             for item in result.iterations

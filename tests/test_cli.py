@@ -15,6 +15,10 @@ from src.optimize import optimize_instance
 from tests.helpers import make_instance
 
 
+def main_with_algorithm(argv):
+    return main([*argv, "--algorithm", ALGORITHM])
+
+
 class CLITests(unittest.TestCase):
     def test_legacy_mode_switch_is_not_accepted(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
@@ -49,7 +53,7 @@ class CLITests(unittest.TestCase):
             )
             console = io.StringIO()
             with redirect_stdout(console):
-                status = main([str(source), "--csv", str(output)])
+                status = main_with_algorithm([str(source), "--csv", str(output)])
             self.assertEqual(status, 0)
             self.assertIn("Optimal cost: 2", console.getvalue())
             with output.open(encoding="utf-8", newline="") as handle:
@@ -60,6 +64,58 @@ class CLITests(unittest.TestCase):
             self.assertEqual(rows[0]["solver_calls"], "0")
             self.assertEqual(rows[0]["cegar_rounds"], "0")
             self.assertEqual(rows[0]["subtour_cuts"], "0")
+
+    def test_problem_option_solves_only_the_requested_problem(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "two.txt"
+            output = root / "result.csv"
+            source.write_text(
+                "n=1\nm=1\nc=1\n"
+                "problem 1\n---\n1\n"
+                "problem 2\n---\n1\n",
+                encoding="utf-8",
+            )
+            completed = optimize_instance(make_instance([{0}], 1, 1, "selected"), algorithm="tsp-sat-cegar")
+            with patch("src.cli.optimize_instance", return_value=completed) as optimize:
+                status = main_with_algorithm(
+                    [str(source), "--problem", "2", "--csv", str(output)]
+                )
+
+            self.assertEqual(status, 0)
+            self.assertEqual(optimize.call_count, 1)
+            self.assertEqual(optimize.call_args.args[0].problem_id, 2)
+            with output.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual([row["problem"] for row in rows], ["selected"])
+
+    def test_problem_option_rejects_unknown_problem_before_solving(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "simple.txt"
+            source.write_text(
+                "n=1\nm=1\nc=1\nproblem 1\n---\n1\n", encoding="utf-8"
+            )
+            stderr = io.StringIO()
+            with patch("src.cli.optimize_instance") as optimize, redirect_stderr(stderr):
+                status = main_with_algorithm([str(source), "--problem", "2", "--no-csv"])
+
+            self.assertEqual(status, 2)
+            self.assertIn("problem 2 was not found", stderr.getvalue())
+            optimize.assert_not_called()
+
+    def test_problem_option_rejects_non_positive_ids_and_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for argv, expected_error in (
+                (["input.txt", "--problem", "0"], "--problem must be greater than zero"),
+                ([str(root), "--problem", "1"], "single input file"),
+            ):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    status = main_with_algorithm(argv)
+                self.assertEqual(status, 2)
+                self.assertIn(expected_error, stderr.getvalue())
 
     def test_keyboard_interrupt_writes_only_completed_instances(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -73,14 +129,14 @@ class CLITests(unittest.TestCase):
                 "problem 2\n---\n1\n",
                 encoding="utf-8",
             )
-            completed = optimize_instance(make_instance([{0}], 1, 1, "completed"))
+            completed = optimize_instance(make_instance([{0}], 1, 1, "completed"), algorithm="tsp-sat-cegar")
             stdout = io.StringIO()
             stderr = io.StringIO()
             with patch(
                 "src.cli.optimize_instance",
                 side_effect=[completed, KeyboardInterrupt()],
             ), redirect_stdout(stdout), redirect_stderr(stderr):
-                status = main([str(source), "--csv", str(output)])
+                status = main_with_algorithm([str(source), "--csv", str(output)])
             self.assertEqual(status, 130)
             self.assertIn("1 completed instances", stderr.getvalue())
             self.assertFalse(output.exists())

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pysat.card import CardEnc, EncType, ITotalizer
 from pysat.formula import CNF, IDPool
 
-from .model import ReducedInstance, TSPBuildResult
+from .model import DirectBuildResult, ReducedInstance, TSPBuildResult
 
 
 def _append_equals(
@@ -25,7 +25,8 @@ def build_tsp_cnf(instance: ReducedInstance, max_bound: int) -> TSPBuildResult:
 
     Real job vertices use identifiers 1..N; vertex 0 is the empty-magazine
     dummy.  ``max_bound`` is the largest decision bound the optimizer will
-    request (normally the greedy upper bound minus one).
+    request (normally the greedy upper bound minus one). The magazine is
+    initially empty.
     """
     if max_bound < 0:
         raise ValueError("max_bound must be non-negative")
@@ -69,16 +70,14 @@ def build_tsp_cnf(instance: ReducedInstance, max_bound: int) -> TSPBuildResult:
             vpool,
         )
 
-    # Every real job has a full magazine and contains its required tools.
+    # Every real job respects capacity and contains its required tools.
     for job, required in enumerate(instance.requirements, start=1):
         for tool in required:
             cnf.append([vars_z[tool, job]])
-        _append_equals(
-            cnf,
-            [vars_z[tool, job] for tool in range(m)],
-            c,
-            vpool,
-        )
+        cnf.extend(CardEnc.atmost(
+            lits=[vars_z[tool, job] for tool in range(m)], bound=c,
+            vpool=vpool, encoding=EncType.seqcounter,
+        ).clauses)
 
     # For the selected predecessor i of j, t[u,j] is exactly the tool added
     # while moving from i's magazine to j's magazine.
@@ -116,20 +115,26 @@ def build_tsp_cnf(instance: ReducedInstance, max_bound: int) -> TSPBuildResult:
     # ITotalizer is deliberately reserved for the objective alone.  Its RHS
     # literal at index k represents at least k+1 true insertion literals, so
     # assuming -rhs[k] enforces T <= k.
-    max_encoded_bound = min(max_bound, len(t_literals) - 1)
-    totalizer = ITotalizer(
-        lits=t_literals,
-        ubound=max_encoded_bound,
-        top_id=vpool.top,
-    )
-    try:
-        before_totalizer = vpool.top
-        cnf.extend(totalizer.cnf.clauses)
-        totalizer_rhs = tuple(totalizer.rhs)
-        totalizer_auxiliary = totalizer.top_id - before_totalizer
-        vpool.top = totalizer.top_id
-    finally:
-        totalizer.delete()
+    if t_literals:
+        max_encoded_bound = min(
+            max_bound, len(t_literals) - 1
+        )
+        totalizer = ITotalizer(
+            lits=t_literals,
+            ubound=max_encoded_bound,
+            top_id=vpool.top,
+        )
+        try:
+            before_totalizer = vpool.top
+            cnf.extend(totalizer.cnf.clauses)
+            totalizer_rhs = tuple(totalizer.rhs)
+            totalizer_auxiliary = totalizer.top_id - before_totalizer
+            vpool.top = totalizer.top_id
+        finally:
+            totalizer.delete()
+    else:
+        totalizer_rhs = ()
+        totalizer_auxiliary = 0
 
     counts = {
         "primary": primary_count,
@@ -149,4 +154,64 @@ def build_tsp_cnf(instance: ReducedInstance, max_bound: int) -> TSPBuildResult:
         totalizer_rhs=totalizer_rhs,
         t_literal_count=len(t_literals),
         base_clause_count=len(cnf.clauses),
+    )
+
+
+def build_direct_cnf(
+    instance: ReducedInstance, max_bound: int, anchor_job: int
+) -> DirectBuildResult:
+    """Encode job positions with reversal symmetry breaking."""
+    if max_bound < 0 or anchor_job not in range(instance.n):
+        raise ValueError("invalid bound or anchor job")
+    cnf, vpool = CNF(), IDPool()
+    n, m = instance.n, instance.m
+    x = {(job, pos): vpool.id(("x", job, pos)) for job in range(n) for pos in range(n)}
+    z = {(tool, pos): vpool.id(("z", tool, pos)) for tool in range(m) for pos in range(n)}
+    t = {(tool, pos): vpool.id(("t", tool, pos)) for tool in range(m) for pos in range(n)}
+    primary = vpool.top
+    for job in range(n):
+        _append_equals(cnf, [x[job, pos] for pos in range(n)], 1, vpool)
+    for pos in range(n):
+        _append_equals(cnf, [x[job, pos] for job in range(n)], 1, vpool)
+        cnf.extend(CardEnc.atmost(lits=[z[tool, pos] for tool in range(m)],
+            bound=instance.c, vpool=vpool, encoding=EncType.seqcounter).clauses)
+    for pos in range((n + 1) // 2, n):
+        cnf.append([-x[anchor_job, pos]])
+    for job, required in enumerate(instance.requirements):
+        for pos in range(n):
+            for tool in required:
+                cnf.append([-x[job, pos], z[tool, pos]])
+    for tool in range(m):
+        for pos in range(n):
+            current, inserted = z[tool, pos], t[tool, pos]
+            cnf.append([-inserted, current])
+            if pos == 0:
+                cnf.append([-current, inserted])
+            else:
+                previous = z[tool, pos - 1]
+                cnf.extend([[-inserted, -previous], [inserted, -current, previous]])
+    sequential = vpool.top - primary
+    literals = list(t.values())
+    rhs = ()
+    before = vpool.top
+    if literals:
+        with ITotalizer(
+            lits=literals, ubound=min(max_bound, len(literals) - 1),
+            top_id=vpool.top,
+        ) as totalizer:
+            cnf.extend(totalizer.cnf.clauses)
+            rhs = tuple(totalizer.rhs)
+            vpool.top = totalizer.top_id
+    totalizer_aux = vpool.top - before
+    return DirectBuildResult(
+        cnf=cnf, vpool=vpool, vars_x=x, vars_z=z, vars_t=t,
+        variable_counts={
+            "primary": primary,
+            "sequential_counter_auxiliary": sequential,
+            "itotalizer_auxiliary": totalizer_aux,
+            "auxiliary": sequential + totalizer_aux,
+            "total": vpool.top, "clauses": len(cnf.clauses),
+        },
+        totalizer_rhs=rhs, t_literal_count=len(literals),
+        base_clause_count=len(cnf.clauses), anchor_job=anchor_job,
     )

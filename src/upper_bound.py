@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .dominance import reconstruct_sequence
-from .ktns import ktns
 from .model import DominanceResult, SSPInstance
 
 
@@ -15,46 +14,38 @@ class UpperBoundResult:
     magazine_configs: tuple[frozenset[int], ...]
 
 
-def greedy_sequence(
-    start: int,
-    requirements: tuple[frozenset[int], ...],
-    distances: tuple[tuple[int, ...], ...],
-    local_to_original: tuple[int, ...],
-) -> tuple[int, ...]:
-    remaining = set(range(len(requirements)))
-    remaining.remove(start)
-    sequence = [start]
-    while remaining:
-        current = sequence[-1]
-        chosen = min(
-            remaining,
-            key=lambda job: (
-                distances[current][job],
-                -len(requirements[current] & requirements[job]),
-                local_to_original[job],
-            ),
-        )
-        sequence.append(chosen)
-        remaining.remove(chosen)
-    return tuple(sequence)
-
-
 def construct_upper_bound(
     original: SSPInstance,
     dominance: DominanceResult,
-    distances: tuple[tuple[int, ...], ...],
 ) -> UpperBoundResult:
     reduced = dominance.reduced
-    best: UpperBoundResult | None = None
-    for start in range(reduced.n):
-        local_sequence = greedy_sequence(
-            start, reduced.requirements, distances, reduced.local_to_original
-        )
-        representative_sequence = tuple(reduced.local_to_original[job] for job in local_sequence)
-        full_sequence = reconstruct_sequence(representative_sequence, dominance)
-        cost, configs = ktns(full_sequence, original.requirements, original.m, original.c)
-        candidate = UpperBoundResult(cost, representative_sequence, full_sequence, configs)
-        if best is None or (candidate.cost, candidate.full_sequence) < (best.cost, best.full_sequence):
-            best = candidate
-    assert best is not None
-    return best
+    frequencies = [sum(tool in required for required in reduced.requirements)
+                   for tool in range(reduced.m)]
+    local_sequence = sorted(range(reduced.n), key=lambda job: (
+        -sum(frequencies[tool] for tool in reduced.requirements[job]),
+        reduced.local_to_original[job],
+    ))
+    magazine: set[int] = set()
+    cost = 0
+    configs: list[frozenset[int]] = []
+    representatives = tuple(reduced.local_to_original[job] for job in local_sequence)
+    for job, representative in zip(local_sequence, representatives):
+        required = reduced.requirements[job]
+        missing = required - magazine
+        cost += len(missing)
+        magazine.update(missing)
+        removable = sorted(magazine - required,
+                           key=lambda tool: reduced.tool_to_original[tool], reverse=True)
+        for tool in removable[:max(0, len(magazine) - reduced.c)]:
+            magazine.remove(tool)
+        config = frozenset(reduced.tool_to_original[tool] for tool in magazine)
+        configs.extend([config] * (1 + len(dominance.dominated_by[representative])))
+    full = reconstruct_sequence(representatives, dominance)
+    previous = frozenset()
+    verified = 0
+    for job, config in zip(full, configs):
+        assert original.requirements[job] <= config and len(config) <= original.c
+        verified += len(config - previous)
+        previous = config
+    assert verified == cost
+    return UpperBoundResult(cost, representatives, full, tuple(configs))

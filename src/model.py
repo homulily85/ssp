@@ -6,6 +6,7 @@ from typing import Any
 
 
 ALGORITHM = "tsp-sat-cegar"
+ALGORITHMS = ("direct-sat", ALGORITHM)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,15 @@ class ReducedInstance:
     c: int
     requirements: tuple[frozenset[int], ...]
     local_to_original: tuple[int, ...]
+    tool_to_original: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.tool_to_original:
+            object.__setattr__(self, "tool_to_original", tuple(range(self.m)))
+        if len(self.tool_to_original) != self.m:
+            raise ValueError("tool_to_original must contain one ID per reduced tool")
+        if len(set(self.tool_to_original)) != self.m:
+            raise ValueError("tool_to_original contains duplicate tool IDs")
 
     @property
     def n(self) -> int:
@@ -56,6 +66,11 @@ class TSPBuildResult:
     totalizer_rhs: tuple[int, ...]
     t_literal_count: int
     base_clause_count: int
+
+
+@dataclass(slots=True)
+class DirectBuildResult(TSPBuildResult):
+    anchor_job: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +135,7 @@ class OptimizationResult:
 
     @property
     def cegar_rounds(self) -> int:
-        return len(self.iterations)
+        return len(self.iterations) if self.algorithm == ALGORITHM else 0
 
     @property
     def subtour_cuts(self) -> int:

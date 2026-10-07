@@ -36,12 +36,23 @@ def preprocess_dominance(instance: SSPInstance) -> DominanceResult:
     dominated_by = {job: tuple(sorted(jobs)) for job, jobs in dominated_lists.items()}
     local_to_original = active_jobs
     original_to_local = {original: local for local, original in enumerate(local_to_original)}
+    tool_to_original = tuple(
+        sorted({tool for required in instance.requirements for tool in required})
+    )
+    original_to_tool = {
+        original: local for local, original in enumerate(tool_to_original)
+    }
+    reduced_capacity = min(instance.c, len(tool_to_original))
     reduced = ReducedInstance(
         name=instance.name,
-        m=instance.m,
-        c=instance.c,
-        requirements=tuple(instance.requirements[job] for job in local_to_original),
+        m=len(tool_to_original),
+        c=reduced_capacity,
+        requirements=tuple(
+            frozenset(original_to_tool[tool] for tool in instance.requirements[job])
+            for job in local_to_original
+        ),
         local_to_original=local_to_original,
+        tool_to_original=tool_to_original,
     )
     result = DominanceResult(
         active_jobs=active_jobs,
@@ -64,6 +75,13 @@ def _assert_dominance_invariants(instance: SSPInstance, result: DominanceResult)
         assert instance.requirements[job] <= instance.requirements[representative]
     flattened = [job for jobs in result.dominated_by.values() for job in jobs]
     assert sorted(flattened) == sorted(result.dominator)
+    reduced = result.reduced
+    assert all(
+        tool in range(reduced.m)
+        for required in reduced.requirements
+        for tool in required
+    )
+    assert reduced.c == min(instance.c, reduced.m)
 
 
 def reconstruct_sequence(
@@ -73,8 +91,8 @@ def reconstruct_sequence(
     for representative in reduced_sequence:
         if representative not in result.dominated_by:
             raise ValueError(f"job {representative} is not an active representative")
-        sequence.extend(result.dominated_by[representative])
         sequence.append(representative)
+        sequence.extend(result.dominated_by[representative])
     full = tuple(sequence)
     expected = set(result.active_jobs) | set(result.dominator)
     assert len(full) == len(expected)

@@ -78,7 +78,7 @@ class TimeoutTests(unittest.TestCase):
         instance = make_instance(
             [{0, 1}, {1, 2}, {2, 3}, {0, 3}], 4, 2, "timeout"
         )
-        result = optimize_instance(instance, time_limit=1e-9)
+        result = optimize_instance(instance, time_limit=1e-9, algorithm="tsp-sat-cegar")
         self.assertEqual(result.status, "TIMEOUT")
         self.assertIsNone(result.optimum)
         self.assertEqual(result.best_cost, result.initial_upper_bound)
@@ -98,7 +98,7 @@ class TimeoutTests(unittest.TestCase):
     def test_non_positive_limit_is_rejected(self):
         instance = make_instance([{0}], 1, 1)
         with self.assertRaises(ValueError):
-            optimize_instance(instance, time_limit=0)
+            optimize_instance(instance, time_limit=0, algorithm="tsp-sat-cegar")
 
 
 if __name__ == "__main__":

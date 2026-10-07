@@ -39,13 +39,14 @@ def brute_force_optimum(instance: SSPInstance) -> tuple[int, tuple[int, ...]]:
 
 def brute_force_magazine_cost(instance: SSPInstance, sequence: tuple[int, ...]) -> int:
     configurations = [
-        frozenset(config) for config in combinations(range(instance.m), instance.c)
+        frozenset(config) for size in range(instance.c + 1)
+        for config in combinations(range(instance.m), size)
     ]
     feasible = [
         [config for config in configurations if instance.requirements[job] <= config]
         for job in sequence
     ]
-    costs = {config: instance.c for config in feasible[0]}
+    costs = {config: len(config) for config in feasible[0]}
     for position in range(1, len(sequence)):
         updated = {}
         for current in feasible[position]:

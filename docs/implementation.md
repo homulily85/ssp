@@ -1,86 +1,60 @@
-# Thiết kế TSP-SAT + CEGAR
+# Thiết kế direct-SAT và TSP-SAT + CEGAR
 
-## Pipeline
+## Pipeline và chi phí
 
-Parser tạo `SSPInstance` với requirement set của từng job. `preprocess_dominance`
-giữ các representative inclusion-maximal; sequence sau khi solve được
-reconstruct về đầy đủ job gốc. `construct_upper_bound` vẫn dùng all-start
-greedy trên reduced instance rồi chạy KTNS trên full sequence. Lower bound là
-`max(C, |union R_i|)`.
+CLI bắt buộc `--algorithm direct-sat|tsp-sat-cegar`; Python API bắt buộc
+keyword `algorithm` của `optimize_instance`. Cả hai dùng khay ban đầu rỗng,
+sức chứa tối đa C và đếm tổng số dụng cụ lắp, kể cả bước đầu.
 
-Solver chạy trên `ReducedInstance`. Với `N` active jobs, dummy có vertex `0`
-và real job local `i` dùng vertex `i + 1`.
+Dominance giữ các công việc có tập yêu cầu inclusion-maximal, ánh xạ lại ID
+công việc và dụng cụ. Dụng cụ không dùng không có biến SAT hay chi phí filler.
+Công việc bị loại được khôi phục ngay sau đại diện, có thể dùng cùng khay.
 
-## Formula
+UB sắp công việc giảm dần theo tổng tần suất dụng cụ trong reduced instance;
+hòa điểm chọn ID công việc gốc nhỏ hơn. Mỗi bước lắp dụng cụ thiếu, rồi tháo
+dụng cụ không cần theo ID gốc giảm dần nếu vượt C. UB lưu đúng chi phí và
+khay greedy, kể cả khay lặp cho công việc bị loại. LB là số dụng cụ khác nhau
+được yêu cầu. KTNS bắt đầu rỗng, lắp khi thiếu, chỉ tháo khi cần chỗ và ưu tiên
+tháo dụng cụ có lần dùng tiếp theo xa nhất.
 
-Các primary variable là:
+## Encoding direct
 
-- `x[i,j]`, `i != j`: vertex `j` đứng ngay sau `i`;
-- `z[u,j]`: tool `u` nằm trong magazine tại real vertex `j`;
-- `t[u,j]`: tool `u` được insert khi đi tới real vertex `j`.
+`DirectBuildResult` lưu `x[job,position]`, `z[tool,position]`,
+`t[tool,position]` với ID local bắt đầu từ 0. Mỗi công việc có đúng một vị trí,
+mỗi vị trí đúng một công việc. Assignment dùng sequential counter; khay dùng
+`CardEnc.atmost` với sequential counter. `x` kéo theo các dụng cụ bắt buộc.
 
-Mọi named variable được cấp trước khi cardinality encoder cấp auxiliary
-variable qua cùng `IDPool`.
+Công việc đầu tiên của greedy chỉ được xuất hiện trong ceil(N/2) vị trí đầu.
+Các vị trí nửa sau bị cấm bằng unit clauses; equality của công việc vẫn áp
+dụng trên toàn bộ vị trí. Mọi thứ tự hoặc thứ tự đảo của nó đều có công việc
+mốc trong nửa đầu. Chi phí tối ưu bảo toàn dưới phép đảo: với các khay khả thi,
+tổng số lần lắp bằng một nửa tổng kích thước hai khay đầu/cuối cộng tổng
+kích thước các symmetric difference giữa khay liên tiếp.
 
-Hai equality degree cho mỗi vertex đảm bảo đúng một incoming và outgoing arc.
-Capacity của mỗi real vertex là `sum_u z[u,j] = C`; requirements là unit
-clauses. Các equality này dùng `CardEnc.equals(..., EncType.seqcounter)`.
+`t[u,0] <-> z[u,0]`; các bước sau:
+`t[u,p] <-> (z[u,p] and not z[u,p-1])`. Không dùng dummy hoặc CEGAR.
 
-Nếu `i,j` đều là real vertex, cho mọi tool `u` formula thêm:
+## Encoding TSP và tìm kiếm
 
-```text
-x[i,j] -> (t[u,j] <-> (z[u,j] and not z[u,i]))
-```
+TSP giữ dummy rỗng 0, real vertex i+1 và adjacency `x[i,j]`. Degree equalities
+tạo cycle cover. Khay mỗi vertex chứa yêu cầu và tối đa min(C,U) dụng cụ.
+Arc được chọn xác định chính xác tập lắp giữa hai khay; arc từ dummy tính
+mọi dụng cụ trong khay đầu. Không tính chi phí quay về dummy.
 
-Với dummy rỗng, arc `0 -> j` dùng `t[u,j] <-> z[u,j]`. Không có transition
-constraint trên arc quay về dummy.
+Sau SAT, các cycle không chứa dummy nhận subtour-exit cut trước lần gọi tiếp.
+Direct và TSP dùng cùng một `IncrementalSolverSession` CaDiCaL và một
+`ITotalizer` cho tổng `t`. Assumption `-rhs[k]` áp đặt tổng lắp <= k.
 
-Objective là tổng toàn bộ `t[u,j]`. Chỉ objective dùng `ITotalizer`. Nếu
-`rhs[k]` là output “ít nhất `k + 1` insertions”, assumption `-rhs[k]` biểu
-diễn `T <= k`. ITotalizer và base clauses chỉ được tạo một lần cho mỗi
-instance.
+Tìm kiếm bắt đầu UB-1. Validator kiểm tra độc lập thứ tự, khay, tập lắp và
+bound; direct kiểm tra thêm công việc mốc, TSP kiểm tra Hamiltonian cycle.
+KTNS trên full sequence không được đắt hơn nghiệm SAT. Incumbent tốt nhất
+quyết định bound tiếp theo. UNSAT chứng minh tối ưu; đạt LB cũng chứng minh
+tối ưu. Nếu timeout, worker được dọn và trả incumbent mà không nhận tối ưu.
+Yêu cầu rỗng toàn bộ có UB=LB=0 và không cần solver.
 
-## CEGAR và tối ưu
+## Báo cáo
 
-Degree constraints chỉ tạo cycle cover. Sau mỗi SAT model, `decode_successor`
-phân rã successor permutation thành directed cycles. Với mọi cycle `S` không
-chứa dummy, solver nhận cut:
-
-```text
-or x[i,j]  for i in S, j not in S
-```
-
-Tất cả bad cycles của cùng model được thêm trước SAT call kế tiếp. CaDiCaL
-chạy trong một `IncrementalSolverSession`; base clauses, ITotalizer,
-subtour cuts và learned clauses không bị reset.
-
-Search bắt đầu tại `UB - 1`. Một Hamiltonian model được kiểm chứng độc lập,
-đếm actual `t` cost `q`, rồi search chuyển trực tiếp sang `q - 1`. UNSAT đầu
-tiên chứng minh incumbent; nếu next bound nhỏ hơn lower bound thì lower bound
-là certificate tương đương. Timeout đóng worker và chỉ trả incumbent khả thi.
-
-## Verifier và reporting
-
-`validate_tsp_solution` không tin encoder: nó kiểm tra Hamiltonian sequence,
-requirements, magazine capacity, initial load, từng transition set và cost
-từ `t`. Sau đó nó reconstruct full sequence, chạy KTNS, và kiểm tra full KTNS
-cost không lớn hơn decoded SAT policy. Magazine sets và inserted-tool sets
-được giữ trong `ValidationResult` để debug.
-
-Mỗi SAT call log `k`, CEGAR round, status, số subtour/cut, formula size,
-solve time, CaDiCaL stats và actual Hamiltonian cost khi có. CSV tổng hợp số
-solver calls, CEGAR rounds và total subtour cuts.
-
-## Module layout
-
-```text
-parser.py       input validation and discovery
-dominance.py    reduction and reconstruction
-upper_bound.py  all-start greedy + KTNS upper bound
-encoding.py     x/z/t TSP formula and ITotalizer
-subtour.py      successor decoding, cycle detection and CEGAR cuts
-solver.py       persistent, time-limited CaDiCaL process
-validate.py     independent model verification
-optimize.py     descending incremental CEGAR search
-report.py       console and CSV output
-```
+Console và CSV giữ tên thuật toán, UB greedy, cost, formula size, solver calls
+và CaDiCaL statistics. Direct có CEGAR rounds, subtour cuts bằng 0. KTNS
+verification cost có thể nhỏ hơn greedy incumbent khi timeout; best cost
+vẫn là chi phí của khay được lưu. Các cột CSV hiện tại được giữ nguyên.
