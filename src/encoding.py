@@ -228,3 +228,35 @@ def encode_direct_bound(build: DirectBuildResult, bound: int) -> list[list[int]]
     build.variable_counts["total"] = build.vpool.top
     build.variable_counts["bound_clauses"] += len(clauses)
     return clauses
+
+
+def encode_direct_bound_fresh(
+    build: DirectBuildResult, bound: int
+) -> list[list[int]]:
+    """Create one direct objective counter with IDs after the immutable base.
+
+    Unlike :func:`encode_direct_bound`, this helper does not advance the
+    build's shared IDPool. It is intended for a solver bootstrapped fresh at
+    each tested bound, so every counter starts at the same auxiliary ID.
+    Formula counts on ``build`` describe only this call's objective counter.
+    """
+    if bound < 0:
+        raise ValueError("decision bound must be non-negative")
+    base_top = build.vpool.top
+    base_auxiliary = base_top - build.variable_counts["primary"]
+    clauses: list[list[int]] = []
+    objective_auxiliary = 0
+    if bound < build.t_literal_count:
+        pool = IDPool(start_from=base_top + 1)
+        encoded = CardEnc.atmost(
+            lits=list(build.vars_t.values()),
+            bound=bound,
+            vpool=pool,
+            encoding=EncType.seqcounter,
+        )
+        clauses = [list(clause) for clause in encoded.clauses]
+        objective_auxiliary = pool.top - base_top
+    build.variable_counts["auxiliary"] = base_auxiliary + objective_auxiliary
+    build.variable_counts["total"] = base_top + objective_auxiliary
+    build.variable_counts["bound_clauses"] = len(clauses)
+    return clauses

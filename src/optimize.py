@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from time import perf_counter
 
 from .dominance import preprocess_dominance
-from .encoding import build_direct_cnf, build_tsp_cnf, encode_direct_bound
+from .encoding import (
+    build_direct_cnf,
+    build_tsp_cnf,
+    encode_direct_bound_fresh,
+)
 from .ktns import ktns
-from .model import ALGORITHM, ALGORITHMS, IterationResult, OptimizationResult, SSPInstance, TSPBuildResult
+from .model import (
+    ALGORITHM,
+    ALGORITHMS,
+    IterationResult,
+    OptimizationResult,
+    SolverResult,
+    SSPInstance,
+    TSPBuildResult,
+)
 from .solver import IncrementalSolverSession, unavailable_solver_stats
 from .subtour import decode_successor, find_cycles, subtour_cut
 from .upper_bound import construct_upper_bound
@@ -122,7 +135,12 @@ def optimize_instance(
             total_subtour_cuts = 0
             known_cuts: set[tuple[int, ...]] = set()
             next_k = first_k
-            with IncrementalSolverSession(build.cnf.clauses) as session:
+            solver_context = (
+                nullcontext()
+                if algorithm == "direct-sat"
+                else IncrementalSolverSession(build.cnf.clauses)
+            )
+            with solver_context as session:
                 while next_k >= lb and status == "OPTIMAL":
                     k = next_k
                     cegar_round = 0
@@ -146,16 +164,37 @@ def optimize_instance(
                             break
 
                         if algorithm == "direct-sat":
-                            bound_clauses = encode_direct_bound(build, k)
+                            bound_clauses = encode_direct_bound_fresh(build, k)
                             assumptions = []
+                            # This solver sees the base formula and exactly one
+                            # freshly encoded objective bound. It is discarded
+                            # before the next K, so neither learned clauses nor
+                            # old objective counters can carry forward.
+                            with IncrementalSolverSession(
+                                build.cnf.clauses + bound_clauses
+                            ) as fresh_session:
+                                call_remaining = time_limit - (perf_counter() - started)
+                                if call_remaining <= 0:
+                                    solved = SolverResult(
+                                        "TIMEOUT",
+                                        0.0,
+                                        None,
+                                        unavailable_solver_stats(),
+                                    )
+                                else:
+                                    solved = fresh_session.solve(
+                                        new_clauses=[],
+                                        assumptions=[],
+                                        time_limit=call_remaining,
+                                    )
                         else:
                             bound_clauses = []
                             assumptions = _bound_assumptions(build, k)
-                        solved = session.solve(
-                            new_clauses=pending_clauses + bound_clauses,
-                            assumptions=assumptions,
-                            time_limit=remaining,
-                        )
+                            solved = session.solve(
+                                new_clauses=pending_clauses + bound_clauses,
+                                assumptions=assumptions,
+                                time_limit=remaining,
+                            )
                         pending_clauses = []
                         if solved.status == "TIMEOUT":
                             iterations.append(

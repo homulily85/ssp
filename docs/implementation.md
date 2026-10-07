@@ -42,11 +42,11 @@ Arc được chọn xác định chính xác tập lắp giữa hai khay; arc t�
 mọi dụng cụ trong khay đầu. Không tính chi phí quay về dummy.
 
 Sau SAT, các cycle không chứa dummy nhận subtour-exit cut trước lần gọi tiếp.
-Hai thuật toán dùng cùng một `IncrementalSolverSession` CaDiCaL. TSP dùng
-`ITotalizer` và assumption `-rhs[k]` để áp đặt tổng lắp <= k. Direct thêm
-`CardEnc.atmost(t, k, EncType.seqcounter)` mới vào solver cho mỗi bound; các
-ràng buộc bound cũ được giữ lại và trở nên dư thừa khi bound giảm. Direct không
-tạo totalizer.
+TSP dùng một `IncrementalSolverSession` CaDiCaL cùng `ITotalizer` và assumption
+`-rhs[k]` để áp đặt tổng lắp <= k. Direct tạo `CardEnc.atmost(t, k,
+EncType.seqcounter)` và một CaDiCaL session fresh cho từng bound. Counter luôn
+bắt đầu ở các auxiliary ID sau base formula; solver, learned clauses và counter
+cũ bị hủy trước bound tiếp theo. Direct không tạo totalizer.
 
 Tìm kiếm bắt đầu UB-1. Validator kiểm tra độc lập thứ tự, khay, tập lắp và
 bound; direct kiểm tra thêm công việc mốc, TSP kiểm tra Hamiltonian cycle.
