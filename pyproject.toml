@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ssp-sat"
 version = "0.1.0"
-description = "Exact direct-SAT and TSP-SAT solver for the Job Sequencing and Tool Switching Problem"
+description = "Exact SAT solvers for the Job Sequencing and Tool Switching Problem"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

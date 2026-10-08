@@ -117,6 +117,81 @@ class CLITests(unittest.TestCase):
                 self.assertEqual(status, 2)
                 self.assertIn(expected_error, stderr.getvalue())
 
+    def test_grouping_checkpoint_resumes_without_duplicate_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "two.txt"
+            output = root / "grouping.csv"
+            source.write_text(
+                "n=1\nm=1\nc=1\nproblem 1\n---\n1\n"
+                "problem 2\n---\n1\n", encoding="utf-8"
+            )
+            completed = optimize_instance(
+                make_instance([{0}], 1, 1, "selected"),
+                algorithm="job-grouping-sat", time_limit=2,
+            )
+            args = [str(source), "--algorithm", "job-grouping-sat",
+                    "--csv", str(output), "--limit", "2"]
+            with patch("src.cli.optimize_instance", return_value=completed) as optimize:
+                self.assertEqual(main(args), 0)
+                self.assertEqual(optimize.call_count, 2)
+                self.assertEqual(main([*args, "--resume"]), 0)
+                self.assertEqual(optimize.call_count, 2)
+            with output.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 2)
+            self.assertEqual({row["objective_definition"] for row in rows},
+                             {"free-initial-magazine-v1"})
+
+    def test_grouping_rejects_no_csv_and_incompatible_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "one.txt"
+            output = root / "grouping.csv"
+            source.write_text("1 1 1\n1\n", encoding="utf-8")
+            for argv, expected in (
+                ([str(source), "--algorithm", "job-grouping-sat", "--no-csv"],
+                 "requires durable CSV"),
+            ):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    self.assertEqual(main(argv), 2)
+                self.assertIn(expected, stderr.getvalue())
+            result = optimize_instance(make_instance([{0}], 1, 1),
+                                       algorithm="job-grouping-sat", time_limit=2)
+            args = [str(source), "--algorithm", "job-grouping-sat",
+                    "--csv", str(output), "--limit", "2"]
+            with patch("src.cli.optimize_instance", return_value=result):
+                self.assertEqual(main(args), 0)
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                self.assertEqual(main([*args, "--resume", "--grouping-strength", "basic"]), 2)
+            self.assertIn("fingerprint does not match", stderr.getvalue())
+
+    def test_grouping_interrupt_preserves_prior_rows_for_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / "two.txt", root / "checkpoint.csv"
+            source.write_text(
+                "n=1\nm=1\nc=1\nproblem 1\n---\n1\n"
+                "problem 2\n---\n1\n", encoding="utf-8"
+            )
+            completed = optimize_instance(make_instance([{0}], 1, 1),
+                                          algorithm="job-grouping-sat", time_limit=2)
+            args = [str(source), "--algorithm", "job-grouping-sat",
+                    "--csv", str(output), "--limit", "2"]
+            with patch("src.cli.optimize_instance",
+                       side_effect=[completed, KeyboardInterrupt()]), redirect_stderr(io.StringIO()):
+                self.assertEqual(main(args), 130)
+            with output.open(encoding="utf-8", newline="") as handle:
+                self.assertEqual(len(list(csv.DictReader(handle))), 1)
+            with patch("src.cli.optimize_instance", return_value=completed) as optimize:
+                self.assertEqual(main([*args, "--resume"]), 0)
+                self.assertEqual(optimize.call_count, 1)
+            with output.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 2)
+
     def test_keyboard_interrupt_writes_only_completed_instances(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

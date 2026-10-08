@@ -6,7 +6,8 @@ from typing import Any
 
 
 ALGORITHM = "tsp-sat-cegar"
-ALGORITHMS = ("direct-sat", ALGORITHM)
+JOB_GROUPING_ALGORITHM = "job-grouping-sat"
+ALGORITHMS = ("direct-sat", ALGORITHM, JOB_GROUPING_ALGORITHM)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +129,11 @@ class OptimizationResult:
     verification_cost: int
     iterations: tuple[IterationResult, ...]
     total_runtime: float
+    grouping_strength: str | None = None
+    number_of_groups: int = 0
+    encoding_time: float = 0.0
+    preprocessing_time: float = 0.0
+    time_to_best: float = 0.0
 
     @property
     def sat_time(self) -> float:

@@ -40,6 +40,9 @@ def print_result(result: OptimizationResult, stream: TextIO) -> None:
     dominance = result.dominance
     print(f"Problem: {result.instance.name}", file=stream)
     print(f"Algorithm: {result.algorithm}", file=stream)
+    if result.algorithm == "job-grouping-sat":
+        print(f"Grouping strength: {result.grouping_strength}", file=stream)
+        print("Objective: insertions after the free initial magazine", file=stream)
     print(
         f"Original jobs: {result.instance.n} | Reduced jobs: {len(dominance.active_jobs)} | "
         f"Dominated jobs: {len(dominance.dominator)}",
@@ -51,7 +54,9 @@ def print_result(result: OptimizationResult, stream: TextIO) -> None:
     )
     print(f"Dominance mapping: {mapping or '(none)'}", file=stream)
     print(f"Lower bound: {result.lower_bound}", file=stream)
-    print(f"Frequency greedy upper bound: {result.initial_upper_bound}", file=stream)
+    upper_label = ("Initial free-load upper bound" if result.algorithm == "job-grouping-sat"
+                   else "Frequency greedy upper bound")
+    print(f"{upper_label}: {result.initial_upper_bound}", file=stream)
     print(f"Initial greedy sequence: {list(result.initial_sequence)}", file=stream)
     for item in result.iterations:
         solver_stats = " ".join(

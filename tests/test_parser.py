@@ -47,9 +47,21 @@ best known value of the number of tool setups: {best}
     def test_all_supplied_data(self):
         root = Path(__file__).resolve().parents[1] / "data"
         files = discover_input_files(root)
-        self.assertEqual(len(files), 168)
+        self.assertEqual(len(files), 1351)
         count = sum(len(parse_file(path)) for path in files)
-        self.assertEqual(count, 1671)
+        self.assertEqual(count, 1351)
+
+    def test_yanasse_dataset_parser_verified_group_counts(self):
+        root = Path(__file__).resolve().parents[1] / "data" / "Yanasse"
+        observed = {}
+        for directory in sorted(root.iterdir()):
+            observed[directory.name] = sum(
+                len(parse_file(path)) for path in discover_input_files(directory)
+            )
+        self.assertEqual(observed, {"Tabela1": 340, "Tabela2": 330,
+                                    "Tabela3": 340, "Tabela4": 260,
+                                    "Tabela5": 80})
+        self.assertEqual(sum(observed.values()), 1350)
 
 
 if __name__ == "__main__":

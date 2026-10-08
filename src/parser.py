@@ -30,6 +30,33 @@ def parse_file(path: str | Path, *, name_prefix: str | None = None) -> list[SSPI
     except (OSError, UnicodeError) as exc:
         raise SSPParseError(f"cannot read {source}: {exc}") from exc
 
+    # Public Yanasse files use a compact one-instance format: ``n m c`` then
+    # one binary row per tool. Keep the richer multi-problem format below.
+    meaningful = [line.strip() for line in lines if line.strip()]
+    if meaningful and re.fullmatch(r"\d+\s+\d+\s+\d+", meaningful[0]):
+        n, m, c = map(int, meaningful[0].split())
+        if n < 1 or m < 1 or not 1 <= c <= m:
+            raise _error(source, "invalid n, m, or c in compact header", 1)
+        rows: list[tuple[bool, ...]] = []
+        for line_number, raw in enumerate(meaningful[1:], 2):
+            values = raw.split()
+            if len(values) != n or any(value not in {"0", "1"} for value in values):
+                raise _error(source, f"expected a binary row with {n} entries", line_number)
+            rows.append(tuple(value == "1" for value in values))
+        if len(rows) != m:
+            raise _error(source, f"found {len(rows)} matrix rows; expected {m}")
+        matrix = tuple(rows)
+        requirements = tuple(
+            frozenset(tool for tool in range(m) if matrix[tool][job])
+            for job in range(n)
+        )
+        if any(len(required) > c for required in requirements):
+            raise _error(source, "a job requires more tools than capacity")
+        display = name_prefix if name_prefix is not None else str(source)
+        match = re.search(r"-(\d+)$", source.stem)
+        problem_id = int(match.group(1)) if match else 1
+        return [SSPInstance(display, n, m, c, matrix, requirements, source, problem_id)]
+
     metadata: dict[str, int] = {}
     headers: list[tuple[int, int]] = []
     for lineno, line in enumerate(lines, 1):
@@ -121,6 +148,9 @@ def looks_like_ssp_file(path: Path) -> bool:
         head = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return False
+    first = next((line.strip() for line in head.splitlines() if line.strip()), "")
+    if re.fullmatch(r"\d+\s+\d+\s+\d+", first):
+        return True
     keys = {match.group(1).lower() for match in _METADATA_RE.finditer(head)}
     return {"n", "m", "c"} <= keys and bool(re.search(r"(?im)^\s*problem\s+\d+", head))
 

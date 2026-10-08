@@ -1,8 +1,8 @@
 # SSP SAT Solver
 
 Exact solver for the Job Sequencing and Tool Switching Problem (SSP), using
-PySAT and CaDiCaL 3.0. Select an algorithm explicitly with the required
-`--algorithm direct-sat|tsp-sat-cegar` option.
+PySAT and CaDiCaL 3.0. Select `direct-sat`, `tsp-sat-cegar`, or
+`job-grouping-sat` explicitly.
 
 Both encodings use an initially empty magazine containing **at most C** tools.
 Cost counts each tool insertion, including the first load. Unused tools do not
@@ -16,6 +16,33 @@ Ties use original job IDs; eviction ties remove the largest original tool ID.
 Its actual magazine policy supplies the initial incumbent. The lower bound is
 the number of distinct required tools. KTNS evaluates SAT sequences and verifies
 that the final incumbent can be executed at no greater cost.
+
+`job-grouping-sat` is a separate pure SAT formulation. It assigns jobs to
+ordered groups that share a magazine configuration, uses sequential counters
+for every cardinality constraint, and starts a fresh CaDiCaL process for each
+decreasing objective bound. Its objective preloads the first magazine for
+free and counts insertions only after that configuration. Use
+`--grouping-strength basic|symmetry|clique`; `clique` is the default.
+Grouping runs require a CSV checkpoint and support `--resume`:
+
+```bash
+uv run ssp-sat data/Yanasse --algorithm job-grouping-sat \
+  --grouping-strength clique --limit 1200 \
+  --csv results/yanasse_job_grouping.csv
+uv run ssp-sat data/Yanasse --algorithm job-grouping-sat \
+  --grouping-strength clique --limit 1200 \
+  --csv results/yanasse_job_grouping.csv --resume
+```
+
+The checkpoint is atomically replaced after each instance, fingerprints the
+dataset and solver settings, and stores the incumbent sequence. The current
+repository contains 1,350 parser-verified Yanasse inputs: A 340, B 330, C 340,
+D 260, E 80. The 2026 C-B&B paper reports 1,390 inputs and 370 for group B.
+Its cited public [HGS-SSP repository](https://github.com/jordanamecler/HGS-SSP/tree/master/Instances/Yanasse)
+(`Instances/Yanasse`, source commit `075705c5463c26a48a8f812153aad747fe15ce6b`)
+also contains 330 B files, byte-for-byte matching this checkout. No source for
+the extra 40 instances was found. Runs are therefore incomplete relative to
+the paper's reported count; no synthetic replacements are used.
 
 `direct-sat` uses job-position assignment variables and restricts the first
 greedy job to the first half of positions to break reversal symmetry.
@@ -51,7 +78,7 @@ and `best known value ...` input lines are deliberately ignored.
 uv run python -m unittest discover -s tests -v
 ```
 
-The suite covers both encodings, symmetry breaking, insertion bounds, CEGAR
+The suite covers all encodings, symmetry breaking, insertion bounds, CEGAR
 cuts, timeouts, CLI selection, dominance reconstruction, and independent
 exhaustive checks using all magazine sizes from zero through C.
 

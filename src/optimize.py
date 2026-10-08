@@ -84,7 +84,7 @@ def _iteration(
     )
 
 
-def optimize_instance(
+def _optimize_legacy_instance(
     instance: SSPInstance,
     time_limit: float = 600.0,
     *,
@@ -318,4 +318,27 @@ def optimize_instance(
         verification_cost=verification_cost,
         iterations=tuple(iterations),
         total_runtime=perf_counter() - started,
+    )
+
+
+def optimize_instance(
+    instance: SSPInstance,
+    time_limit: float = 600.0,
+    *,
+    algorithm: str,
+    grouping_strength: str = "clique",
+) -> OptimizationResult:
+    """Dispatch to the selected production algorithm.
+
+    Legacy algorithms retain their original optimizer and objective. Grouping
+    SAT has a separate free-initial-load objective and fresh solver per bound.
+    """
+    if algorithm == "job-grouping-sat":
+        from .optimize_grouping import optimize_grouping_instance
+
+        return optimize_grouping_instance(
+            instance, time_limit=time_limit, strength=grouping_strength
+        )
+    return _optimize_legacy_instance(
+        instance, time_limit=time_limit, algorithm=algorithm
     )

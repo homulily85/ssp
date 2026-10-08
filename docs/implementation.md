@@ -1,8 +1,8 @@
-# Thiết kế direct-SAT và TSP-SAT + CEGAR
+# Thiết kế các bộ giải SAT cho SSP
 
 ## Pipeline và chi phí
 
-CLI bắt buộc `--algorithm direct-sat|tsp-sat-cegar`; Python API bắt buộc
+CLI bắt buộc chọn `direct-sat`, `tsp-sat-cegar` hoặc `job-grouping-sat`; Python API bắt buộc
 keyword `algorithm` của `optimize_instance`. Cả hai dùng khay ban đầu rỗng,
 sức chứa tối đa C và đếm tổng số dụng cụ lắp, kể cả bước đầu.
 
@@ -61,3 +61,47 @@ Console và CSV giữ tên thuật toán, UB greedy, cost, formula size, solver 
 và CaDiCaL statistics. Direct có CEGAR rounds, subtour cuts bằng 0. KTNS
 verification cost có thể nhỏ hơn greedy incumbent khi timeout; best cost
 vẫn là chi phí của khay được lưu. Các cột CSV hiện tại được giữ nguyên.
+
+## Job Grouping SAT
+
+`job-grouping-sat` uses a separate objective: the initial magazine is free,
+and cost sums `|M[g] - M[g-1]|` only for `g > 0`. `ktns_switches` leaves the
+legacy `ktns` semantics intact and is checked against an independent oracle
+that enumerates magazine states. For a fixed sequence, the cost equals
+`legacy_cost - min(C, number of distinct required tools)`.
+
+Its lower bound is `max(0, U-C)`. The feasible upper-bound sequence is
+reevaluated with `ktns_switches`, after dominance preprocessing reconstructs
+the full sequence.
+
+Each bound `K` builds a fresh CNF and `IDPool` with `G=min(n,K+1)`. All primary
+variables are allocated before auxiliaries. Assignment, capacity, clique, and
+objective cardinalities use sequential counters. Each bound is solved once by
+a fresh `cadical300` worker, which is then destroyed. No clauses or learned
+state carry into the next bound.
+
+`basic` uses the exact grouping model. `symmetry` adds the earliest-compatible-
+group rule. `clique` adds at-most-one-per-group constraints for up to 100
+deterministically discovered incompatibility cliques. Exact capacity clauses
+remain active in all configurations.
+
+The CLI atomically saves each completed instance to CSV, including objective
+version, dataset and configuration fingerprints, and the incumbent sequence.
+`--resume` skips committed instances and rejects an incompatible checkpoint.
+The parser verifies 1,350 current Yanasse inputs: A=340, B=330, C=340, D=260,
+E=80. The 2026 C-B&B paper reports 1,390 total and 370 in B. Its cited public
+HGS-SSP source (`jordanamecler/HGS-SSP`, `Instances/Yanasse`) has the same 330
+B files, and their checksums match this checkout. The extra 40 B instances
+remain unaccounted for; runs are incomplete relative to the paper's reported
+count. No synthetic inputs were created.
+
+For objective comparison, Locatelli et al. define sequence cost as the sum of
+magazine insertions from the second job onward, so their C-B&B values use the
+same initial-load-free convention; no offset is needed. Their experiment used
+an Apple M3/16 GB machine, macOS 26, and a 1,200-second per-instance limit. The
+paper reports 1,390/1,390 optimal Yanasse results and group average times of
+0.00, 0.00, 0.07, 15.63, and 0.02 seconds for A–E. These are published
+aggregate reference values, not a hardware-normalized comparison.
+
+References: [Akhundov and Ostrowski (2024), DOI 10.1016/j.ejor.2024.02.030](https://doi.org/10.1016/j.ejor.2024.02.030);
+[Locatelli, Côté, and Coelho (2026), arXiv:2609.03219](https://arxiv.org/abs/2609.03219).
